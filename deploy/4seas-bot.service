@@ -1,0 +1,31 @@
+[Unit]
+Description=4Seas Community Telegram Bot
+Documentation=https://github.com/4seas-community/4Seas-bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=4seas
+WorkingDirectory=/opt/4Seas-bot
+EnvironmentFile=/opt/4Seas-bot/.env
+ExecStart=/opt/4Seas-bot/.venv/bin/python -m bot
+
+Restart=always
+RestartSec=10
+# 反复崩溃时退避，避免疯狂重启把 Telegram API 打出限流
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=4seas-bot
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/4Seas-bot/data
+
+[Install]
+WantedBy=multi-user.target

@@ -107,17 +107,49 @@ GET https://api.sola.day/api/v1/groups/4seas/calendar.ics
 
 ### 3.3 选型与降级链
 
-主用 JSON API：字段结构化，便于排版和过滤。iCal 是全量历史（429 条），每天解析 377 KB 浪费且需要额外的 `icalendar` 依赖。
+主用 JSON API：字段结构化，便于排版和过滤。iCal 是全量历史（429 条），每天解析 377 KB 浪费。
 
 事件源设计为**可插拔适配器**，降级链：
 
 ```
-SolaApiSource  ──失败──▶  SolaIcsSource  ──失败──▶  LocalYamlSource  ──▶  播报「今日暂无数据」并私信管理员
+SolaApiSource  ──失败──▶  SolaIcsSource  ──失败──▶  LocalYamlSource  ──▶  记录失败并私信管理员
 ```
 
-`LocalYamlSource` 读 `data/events.yaml`，同时承担两个职责：M1 阶段先跑通链路（不依赖外部服务），以及日后补充 sola.day 上没有的线下活动。
+`LocalYamlSource` 读 `data/events.yaml`，承担两个职责：所有上游都挂时的兜底，以及补充 sola.day 上没有的线下活动。
 
-**注意**：sola.day 未提供正式 API 文档，端点信息来自开源 SDK 源码。契约可能变更 —— 因此 `services/events.py` 必须对字段缺失容错，且需要一个针对真实端点的 smoke test 用于早期发现破坏性变更。
+**注意**：sola.day 未提供正式 API 文档，端点信息来自开源 SDK 源码。契约可能变更 —— 因此 `services/events.py` 对字段缺失一律容错，单个事件解析失败只跳过它，不让整次同步挂掉（见 `tests/test_events.py` 里的 `test_unknown_fields_do_not_break_parsing`）。
+
+### 3.4 导入落库与幂等
+
+**不在播报时直接打上游**。定时任务把活动导入本地 SQLite，播报只读库。这样上游抖动不会影响播报，改播报范围也不需要重新拉数据。
+
+```
+Social Layer            每天 08:30            SQLite events 表        每天 09:00
+api.sola.day     ──── sync_events ────▶   (source, event_id) 唯一   ──── 读库 ────▶  群内播报
+未来 SYNC_HORIZON_DAYS 天                                              查询窗口 = DAILY_REPORT_DAYS_AHEAD
+```
+
+导入时间比播报早 30 分钟，保证播报读到的是当天最新数据。启动时额外补一次（`SYNC_ON_STARTUP`），避免刚部署完库是空的。
+
+**幂等的三层保证**：
+
+| 层 | 机制 | 解决什么 |
+|---|---|---|
+| 1 | `PRIMARY KEY (source, event_id)` + `ON CONFLICT DO UPDATE` | 同一活动重复导入只有一行 |
+| 2 | `content_hash` | 内容没变就不动 `updated_at`，"这条改过没有"始终可查 |
+| 3 | 窗口内软删除（`deleted_at`） | 上游取消的活动下架而非物理删除，恢复时自动复活 |
+
+因此同步任务可以任意频率重复执行 —— 跑 100 次和跑 1 次的库状态完全一致。管理员的 `/sync` 命令随便点也不会产生脏数据。
+
+三个刻意的设计取舍：
+
+- **`participant_count` 不参与 `content_hash`。** 报名人数天天变，算进去会让每次同步都判定为"内容变了"，`updated_at` 就失去意义。但新的人数照常落库。
+- **软删除只在同步窗口内对账。** 窗口外的历史数据不动，否则把 horizon 从 60 天改成 7 天会误删一大批。
+- **上游返回空不等于全部取消。** 只有带 window 参数的同步才做下架对账；空结果不会清空表。
+
+实测（2026-07-30，真实端点）：首次导入 79 条（60 天窗口，从 197 条 upcoming 里筛出），连续再跑两次均为「新增 0 · 更新 0 · 无变化 79」，行数不变。
+
+同步结果写 `sync_log` 表，`/status` 直接展示最近一次的 拉取/新增/更新/无变化/下架 五个数。
 
 ---
 
@@ -126,39 +158,55 @@ SolaApiSource  ──失败──▶  SolaIcsSource  ──失败──▶  Loca
 ```
 4Seas-bot/
 ├── bot/
-│   ├── __main__.py           # Application 构建、handler 注册、job 注册、启动
+│   ├── __main__.py           # Application 构建、handler 注册、job 调度、启动
 │   ├── config.py             # pydantic-settings；.env → 强类型配置
+│   ├── models.py             # Event —— 跨数据源的统一模型
+│   ├── render.py             # Event → Telegram HTML 消息
+│   ├── storage.py            # SQLite：活动库(幂等 UPSERT)、同步日志、冷却、用量
+│   ├── deps.py               # 进程级单例，便于 /reload 与测试替换
 │   ├── handlers/
 │   │   ├── commands.py       # /start /help /events /ask /faq + 管理命令
-│   │   ├── keywords.py       # 能力4：filters.Regex + 冷却
-│   │   ├── interactions.py   # 能力3：新成员欢迎、被 @ / 被回复
-│   │   └── errors.py         # 全局 error handler → 日志 + 私信管理员
+│   │   ├── interactions.py   # 能力3、4：欢迎、被 @、关键词触发
+│   │   └── errors.py         # 群白名单守卫 + 全局 error handler
 │   ├── jobs/
-│   │   └── daily_report.py   # 能力1：run_daily
-│   ├── services/
-│   │   ├── events/           # 事件源适配器（sola_api / sola_ics / local_yaml）
-│   │   ├── llm.py            # 能力2：OpenAI 兼容客户端 + 降级
-│   │   ├── kb.py             # FAQ 加载、切分、检索
-│   │   └── ratelimit.py      # 每用户令牌桶 + 每群关键词冷却
-│   └── storage/
-│       └── db.py             # SQLite：冷却记录、用量计数、播报去重
+│   │   ├── sync_events.py    # 定时导入（幂等）
+│   │   └── daily_report.py   # 能力1：读库 → 渲染 → 发送
+│   └── services/
+│       ├── events.py         # 三个事件源适配器 + 降级链
+│       ├── keywords.py       # keywords.yaml → 编译后的正则规则
+│       ├── kb.py             # FAQ 切分 + BM25 检索
+│       └── llm.py            # 能力2：DeepSeek 主 / OpenAI 兜底
 ├── data/
-│   ├── faq.md                # 运营维护
-│   ├── keywords.yaml         # 运营维护
-│   └── events.yaml           # 补充活动 / 降级兜底
-├── docs/
-├── tests/
-├── .env.example
-└── pyproject.toml
+│   ├── faq.md                # 运营维护，/reload 热加载
+│   ├── keywords.yaml         # 运营维护，/reload 热加载
+│   └── events.yaml           # 补充活动 / 最后兜底
+├── docs/ · tests/ · .env.example · pyproject.toml
 ```
+
+Handler 用 PTB 的 group 机制分优先级：
+
+| group | 内容 |
+|---|---|
+| -1 | 群白名单守卫（非白名单群直接退群，抛 `ApplicationHandlerStop`） |
+| 0 | 命令 + 新成员欢迎 |
+| 1 | 被 @ / 被回复 → 问答（命中后抛 `ApplicationHandlerStop`，阻断 group 2） |
+| 2 | 关键词主动触发 |
+
+group 1 命中后阻断 group 2，是为了避免同一条消息既被当成提问回答、又被关键词规则二次回复。
 
 ### 4.1 四项能力的实现要点
 
 **能力 1 · 每日播报**
 
-`JobQueue.run_daily` 在 `DAILY_REPORT_TIME`（默认 09:00 Asia/Bangkok）触发。拉取 `upcoming` 事件，取「今天 + 未来 3 天」，按开始时间排序，渲染为一条 HTML 消息（Telegram `parse_mode=HTML`，比 MarkdownV2 少一堆转义坑）。
+`JobQueue.run_daily` 在 `DAILY_REPORT_TIME`（默认 09:00 Asia/Bangkok）触发，从库里查 `[今天 00:00, 今天+DAILY_REPORT_DAYS_AHEAD 23:59]` 窗口内的活动。当前配置 `DAILY_REPORT_DAYS_AHEAD=0`，即只播当天。
 
-去重：`storage` 记录已播报的 `(chat_id, date)`，防止进程重启导致同日重播。
+查询条件是 `start_ts <= 窗口末 AND COALESCE(end_ts, start_ts) >= 窗口初`，即"与窗口有交集"而不是"开始于窗口内" —— 这样昨天开始、今天还在进行的跨天活动也会出现在今天的播报里。
+
+渲染用 `parse_mode=HTML` 而不是 MarkdownV2：后者要求转义 `_*[]()~>#+-=|{}.!`，而活动标题里这些字符满地都是（实测有中泰英混排、`&`、`#` 等），漏转义一个就整条消息发不出去。所有用户内容过 `html.escape`。
+
+超长消息（>4096 字符）按行截断，保证不把 HTML 标签劈成两半 —— 测试断言 `<b>` 与 `</b>` 数量相等。
+
+去重：`report_log` 记录已播报的 `(chat_id, date)`，进程重启不会同日重播；`/report` 可强制重发。
 
 **能力 2 · 通用问答**
 
@@ -227,15 +275,24 @@ RestartSec=10
 
 ## 7. 里程碑
 
-| 阶段 | 内容 | 预估 | 验收 |
-|---|---|---|---|
-| **M0** | 骨架：config、`/start` `/help`、systemd 部署、日志 | 0.5d | bot 在目标群响应 `/help` |
-| **M1** | 能力 1：Sola 适配器 + JobQueue 播报 + 降级链 | 1d | 次日 09:00 自动播报正确活动 |
-| **M2** | 能力 4：keywords.yaml + 冷却 + 热加载 | 0.5d | 群内说「签证」触发一次，1 小时内不再触发 |
-| **M3** | 能力 2 + 3：FAQ 检索 + DeepSeek + 欢迎语 + 限流 | 1d | `/ask` 答对 FAQ 内问题；FAQ 外问题回答"不知道" |
-| **M4** | 运营化：管理命令、README、测试、Docker | 1d | `/reload` 生效；smoke test 通过 |
+| 阶段 | 内容 | 状态 |
+|---|---|---|
+| **M0** | 骨架：config、命令、白名单守卫、日志、错误告警 | ✅ 已完成 |
+| **M1** | 能力 1：三个事件源 + 幂等导入 + JobQueue 播报 | ✅ 已完成，真实数据验证通过 |
+| **M2** | 能力 4：keywords.yaml + 冷却 + 热加载 | ✅ 已完成 |
+| **M3** | 能力 2 + 3：BM25 检索 + DeepSeek + 欢迎语 + 限流 | ✅ 已完成 |
+| **M4** | 运营化：`/sync` `/status`、systemd、测试、文档 | 🔶 测试与文档已完成，systemd 部署待上机 |
 
-合计约 4 天。**M0 的第一步是关掉 privacy mode**，否则 M2 无法验收。
+前置条件 privacy mode 已于 2026-07-30 关闭（`getMe.can_read_all_group_messages = True`），能力 4 具备生效条件。
+
+**已验证**：
+
+- 30 个单元测试通过（渲染、时间窗、幂等、软删除、字段往返）
+- 真实端点导入 79 条活动，连续三次同步行数不变
+- bot 启动、两个定时任务正常调度、启动补同步执行成功
+- 播报消息真实投递成功（发到管理员私聊，未发群）
+
+**未验证**：群内的关键词触发、新成员欢迎、`/ask` 问答 —— 这几项需要 bot 在群里实际收发消息才能确认。
 
 ---
 

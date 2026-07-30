@@ -1,0 +1,44 @@
+# 关键词主动触发规则
+#
+# match     命中的词。英文按单词边界匹配(visa 不会命中 visable),中文直接包含匹配。
+# cooldown  同一个群内该规则的冷却秒数。必填思路:群里 776 人,不设冷却必然刷屏。
+# reply     回复内容,支持 Telegram HTML: <b>粗体</b> <i>斜体</i> <a href="">链接</a> <code>代码</code>
+#
+# 改完在群里发 /reload 即可生效,不用重启。
+# 一条消息最多触发一条规则(取第一条命中的),不叠加。
+
+- id: events
+  match: ["有什么活动", "最近活动", "今天有啥", "what events", "any events"]
+  cooldown: 1800
+  reply: |
+    📅 发 /events 就能看近期活动，
+    或者直接看 <a href="https://app.sola.day/event/4seas">Social Layer 上的 4Seas 日历</a>。
+
+- id: join
+  match: ["怎么加入", "如何加入", "how to join", "how do i join"]
+  cooldown: 3600
+  reply: |
+    🙌 欢迎！社区活动都在 <a href="https://app.sola.day/event/4seas">Social Layer</a> 上，
+    直接挑一场感兴趣的报名来玩就行，没有门槛。
+    有具体问题可以 @管理员。
+
+- id: visa
+  match: ["签证", "visa", "落地签", "签证延期", "visa run"]
+  cooldown: 3600
+  reply: |
+    🛂 泰国签证相关的问题，群里有不少人踩过坑，直接问一句通常很快有人答。
+    <i>(管理员：这条回复的内容还没填，编辑 data/keywords.yaml 的 visa 规则)</i>
+
+- id: housing
+  match: ["住宿", "房子", "租房", "housing", "co-living", "coliving", "accommodation"]
+  cooldown: 3600
+  reply: |
+    🏠 住宿问题群里经常聊，可以直接问。
+    <i>(管理员：这条回复的内容还没填，编辑 data/keywords.yaml 的 housing 规则)</i>
+
+- id: wifi
+  match: ["wifi", "wi-fi", "网络密码", "无线密码"]
+  cooldown: 7200
+  reply: |
+    📶 场地 Wi-Fi 信息问一下现场的管理员就行。
+    <i>(管理员：这条回复的内容还没填)</i>

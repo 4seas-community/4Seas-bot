@@ -18,7 +18,20 @@ Telegram: [@zuchiangmaibot](https://t.me/zuchiangmaibot) · 活动数据来自 [
 | 3 | **互动响应** | 新成员欢迎、被回复时接话、常用命令（`/events` `/faq` `/help`） |
 | 4 | **关键词主动触发** | 群里出现「住宿」「签证」「怎么报名」这类词，自动补一条有用的信息 |
 
-活动数据不用手填 —— 直接读 4Seas 在 Social Layer 上的公开日历，运营在 sola.day 建活动，bot 自动就播报了。
+活动数据不用手填 —— 运营在 sola.day 建活动，bot 自动就播报了。
+
+### 活动是怎么进来的
+
+```
+Social Layer          每天 08:30           本地 SQLite         每天 09:00
+api.sola.day    ──导入──▶   events 表   ──读库──▶   群内播报
+(未来 60 天)                (幂等,无重复)
+```
+
+导入是**幂等**的：同一个活动无论同步多少次都只有一行。靠三层保证 ——
+主键 `(source, event_id)` + UPSERT、`content_hash` 判断内容有没有真的变过、
+上游取消的活动打软删除标记而不是物理删除。所以这个任务可以任意频率重跑，
+跑 100 次和跑 1 次的库状态完全一致。管理员随时可以 `/sync` 手动补一次。
 
 ---
 
@@ -29,10 +42,12 @@ Telegram: [@zuchiangmaibot](https://t.me/zuchiangmaibot) · 活动数据来自 [
 ```bash
 git clone git@github.com:4seas-community/4Seas-bot.git
 cd 4Seas-bot
-uv sync                      # 或 pip install -e .
+uv venv --python 3.11 && uv pip install -e ".[dev]"
 cp .env.example .env         # 填 token,见下
-python -m bot                # 长轮询启动
+.venv/bin/python -m bot      # 长轮询启动
 ```
+
+启动时会自动补一次活动导入，所以第一次跑完库里就有数据了。
 
 ### 必填环境变量
 
@@ -43,9 +58,15 @@ TELEGRAM_ALLOWED_CHATS=      # 允许 bot 工作的群 id,逗号分隔(白名单
 DEEPSEEK_API_KEY=            # 问答用,主力模型
 OPENAI_API_KEY=              # 可选,DeepSeek 挂了时兜底
 SOLA_GROUP=4seas             # Social Layer 上的社区标识
+SYNC_TIME=08:30              # 每天几点导入活动(比播报早半小时)
+SYNC_HORIZON_DAYS=60         # 一次导入未来多少天
 DAILY_REPORT_TIME=09:00      # 播报时间
+DAILY_REPORT_DAYS_AHEAD=0    # 0=只播当天;3=当天+未来3天
 TZ=Asia/Bangkok
 ```
+
+改 `DAILY_REPORT_DAYS_AHEAD` 不需要重新导入 —— 库里存的是未来 60 天，
+播报只是换个查询窗口。完整配置项见 [`.env.example`](.env.example)。
 
 ### ⚠️ 一个必做的手工步骤
 
@@ -107,9 +128,12 @@ Residency 期间提供 co-living,详见 ...
 | `/events` | 所有人 | 手动拉一次近期活动 |
 | `/ask <问题>` | 所有人 | 基于 FAQ 提问（有频率限制） |
 | `/faq` | 所有人 | 列出 FAQ 目录 |
+| `/sync` | 管理员 | 立刻从 Social Layer 导入一次活动（幂等，随便点） |
 | `/report` | 管理员 | 立刻手动触发一次每日播报 |
 | `/reload` | 管理员 | 重新加载 faq.md 和 keywords.yaml |
-| `/status` | 管理员 | 查看运行状态、下次播报时间、今日 LLM 调用量 |
+| `/status` | 管理员 | 活动库存量、上次/下次同步、下次播报、问答用量 |
+
+`/events` 也可以带参数：`/events 7` 看未来 7 天（直接查库，不打上游）。
 
 ---
 

@@ -1,0 +1,18 @@
+# 本地补充活动 —— 降级链的最后一环。
+#
+# 两个用途：
+#   1. Sola API 和 iCal 都挂了时,至少还能播出点东西
+#   2. 补充没有发在 Social Layer 上的线下活动
+#
+# 时间写 ISO 8601。不带时区偏移时按 .env 里的 TZ(默认 Asia/Bangkok)解释。
+# 全天活动写成 00:00:00 → 23:59:59。
+
+# - id: demo-1
+#   title: 周三共学会
+#   start: "2026-08-05T19:00:00"
+#   end: "2026-08-05T21:00:00"
+#   location: Zuzalu Library 2nd floor
+#   host: 4Seas
+#   tags: [共学, Community]
+#   notes: 带上你正在做的东西,轮流讲 10 分钟。
+#   url: https://app.sola.day/event/4seas
