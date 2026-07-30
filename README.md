@@ -82,6 +82,20 @@ TZ=Asia/Bangkok
 改这两个值不需要重新导入 —— 库里存的是未来 60 天，播报只是换个查询窗口。
 完整配置项见 [`.env.example`](.env.example)。
 
+### 怎么拿到群的 chat_id
+
+把 bot 拉进群、在群里发一条消息，然后：
+
+```bash
+.venv/bin/python scripts/chat_ids.py          # 读一次
+.venv/bin/python scripts/chat_ids.py --watch  # 蹲守,等新群出现
+```
+
+它会直接打印可以粘进 `.env` 的 `TELEGRAM_ALLOWED_CHATS=...`。
+
+⚠️ **bot 正在运行时别跑这个** —— 长轮询同一个 token 只允许一个消费者，会互相抢消息。
+另外超级群的 id 是负数且带 `-100` 前缀，别手滑写错。
+
 ### ⚠️ 一个必做的手工步骤
 
 **关键词触发（能力 4）默认是不工作的。** Telegram bot 有 privacy mode，开启时 bot 在群里只能收到 `/命令` 和 @ 它的消息，普通聊天内容它看不见。
