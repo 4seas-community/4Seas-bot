@@ -20,6 +20,7 @@ import os
 import re
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -52,8 +53,22 @@ def load_token() -> str:
 
 def api(token: str, method: str, params: str = "") -> dict:
     url = f"https://api.telegram.org/bot{token}/{method}{params}"
-    with urllib.request.urlopen(url, timeout=30) as resp:
-        return json.load(resp)
+    try:
+        with urllib.request.urlopen(url, timeout=30) as resp:
+            return json.load(resp)
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", "replace")
+        if exc.code == 409:
+            sys.exit(
+                "\n❌ 409 Conflict —— bot 正在运行，抢不到 update。\n\n"
+                "长轮询同一个 token 只允许一个消费者。先停掉 bot 再跑本脚本：\n"
+                "    pkill -f 'python -m bot'\n"
+            )
+        if exc.code == 401:
+            sys.exit("\n❌ 401 Unauthorized —— token 不对或已被 BotFather 重置。\n")
+        sys.exit(f"\n❌ Telegram API {exc.code}：{body}\n")
+    except urllib.error.URLError as exc:
+        sys.exit(f"\n❌ 网络不通：{exc.reason}\n")
 
 
 def collect_chats(token: str) -> dict[int, tuple[str, str]]:
