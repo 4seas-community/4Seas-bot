@@ -35,10 +35,19 @@ def _parse_iso(value: str | None) -> dt.datetime | None:
         return None
 
 
-def day_window(days_ahead: int, tz: ZoneInfo, now: dt.datetime | None = None):
-    """返回 [今天 00:00, 今天+days_ahead 23:59:59]（本地时区）。"""
+def day_window(
+    days_ahead: int,
+    tz: ZoneInfo,
+    now: dt.datetime | None = None,
+    offset_days: int = 0,
+):
+    """返回 [今天+offset 00:00, 今天+offset+days_ahead 23:59:59]（本地时区）。
+
+    offset_days=0 → 从今天算起；=1 → 从明天算起（晚上预告次日活动用）。
+    """
     now = (now or dt.datetime.now(tz)).astimezone(tz)
-    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    base = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    start = base + dt.timedelta(days=offset_days)
     end = (start + dt.timedelta(days=days_ahead)).replace(hour=23, minute=59, second=59)
     return start, end
 

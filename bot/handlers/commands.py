@@ -28,7 +28,7 @@ HELP = """👋 我是 <b>4Seas 社区机器人</b>
 也可以直接 @我 提问。
 
 活动数据来自 <a href="https://app.sola.day/event/4seas">Social Layer</a>，
-每天 {time} 我会在群里播报当天活动。"""
+每天晚上 {time} 我会在群里预告<b>明天</b>有什么活动。"""
 
 ADMIN_HELP = """
 <b>管理员：</b>
@@ -57,8 +57,12 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_events(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """手动查活动。可以带参数：/events 3 表示看未来 3 天。"""
-    days = settings.daily_report_days_ahead
+    """手动查活动。始终从今天算起（跟晚上预告次日的播报不同）。
+
+    /events    → 今天起 EVENTS_COMMAND_DAYS+1 天
+    /events 3  → 今天起 4 天
+    """
+    days = settings.events_command_days
     if context.args:
         try:
             days = max(0, min(30, int(context.args[0])))
@@ -68,14 +72,14 @@ async def cmd_events(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     msg = update.effective_message
     await context.bot.send_chat_action(msg.chat_id, ChatAction.TYPING)
     try:
-        events = await load_events(days)
+        events = await load_events(days, offset_days=0)
     except Exception as exc:
         log.error("查活动失败：%s", exc, exc_info=True)
         await msg.reply_text("😵 活动数据暂时取不到，稍后再试；或直接看 https://app.sola.day/event/4seas")
         return
 
     text = render_daily_report(
-        events, days_ahead=days, today=dt.datetime.now(settings.zone).date()
+        events, days_ahead=days, today=dt.datetime.now(settings.zone).date(), offset_days=0
     )
     await msg.reply_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
@@ -169,7 +173,6 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     today = dt.datetime.now(settings.zone).date()
-    scope = "仅当天" if settings.daily_report_days_ahead == 0 else f"当天 + 未来 {settings.daily_report_days_ahead} 天"
     stats = storage.event_stats()
     last = storage.last_sync()
 
@@ -194,11 +197,11 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"  上次同步：{sync_line}",
         f"  {detail}" if detail else None,
         f"  错误：{err}" if err else None,
-        f"  下次同步：{_next_run(context, 'sync_events')}（每天 {settings.sync_time}，导入未来 {settings.sync_horizon_days} 天）",
+        f"  同步时间：每天 {settings.sync_times}（导入未来 {settings.sync_horizon_days} 天）",
         "",
         "<b>播报</b>",
         f"  目标群：<code>{settings.report_chat_id}</code>",
-        f"  范围：{scope}",
+        f"  时间：每天 {settings.daily_report_time}，播 {settings.report_scope_label}",
         f"  下次播报：{_next_run(context, 'daily_report')}",
         f"  今天是否已播：{'是' if storage.already_reported(settings.report_chat_id or 0, today) else '否'}",
         "",

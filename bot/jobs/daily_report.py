@@ -17,9 +17,11 @@ from .sync_events import sync_events
 log = logging.getLogger(__name__)
 
 
-async def load_events(days_ahead: int, *, allow_sync: bool = True) -> list[Event]:
+async def load_events(
+    days_ahead: int, *, offset_days: int = 0, allow_sync: bool = True
+) -> list[Event]:
     """读库取活动。库里为空且允许同步时，先补一次同步再读。"""
-    start, end = day_window(days_ahead, settings.zone)
+    start, end = day_window(days_ahead, settings.zone, offset_days=offset_days)
     events = storage.query_events(start, end)
     if events or not allow_sync:
         return events
@@ -38,31 +40,37 @@ async def send_daily_report(
     *,
     force: bool = False,
     days_ahead: int | None = None,
+    offset_days: int | None = None,
 ) -> str:
     """读库 → 渲染 → 发送。返回一句给管理员看的执行结果。"""
     today = dt.datetime.now(settings.zone).date()
     days = settings.daily_report_days_ahead if days_ahead is None else days_ahead
+    offset = settings.daily_report_offset_days if offset_days is None else offset_days
 
     if not force and storage.already_reported(chat_id, today):
         log.info("chat %s 今天已播报过，跳过", chat_id)
         return "今天已经播报过了（用 /report 可强制重发）"
 
     try:
-        events = await load_events(days)
+        events = await load_events(days, offset_days=offset)
     except Exception as exc:
         log.error("取活动失败：%s", exc, exc_info=True)
         await _alert_admins(context, f"⚠️ 每日播报取数失败：{exc}")
         return f"取数失败：{exc}"
 
     if not events and not settings.daily_report_when_empty:
-        log.info("今天没有活动且配置为静默跳过")
+        log.info("目标日期没有活动且配置为静默跳过")
         if not force:
             storage.mark_reported(chat_id, today)
-        return "今天没有活动，按配置静默跳过"
+        return "目标日期没有活动，按配置静默跳过"
 
     last = storage.last_sync()
     text = render_daily_report(
-        events, days_ahead=days, today=today, source=last["source"] if last else None
+        events,
+        days_ahead=days,
+        today=today,
+        offset_days=offset,
+        source=last["source"] if last else None,
     )
     await context.bot.send_message(
         chat_id=chat_id,

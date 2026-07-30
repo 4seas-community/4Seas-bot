@@ -8,7 +8,7 @@
 
 一期交付一个 Telegram 社区机器人，覆盖四项能力：
 
-1. **每日活动播报**（daily events report）
+1. **每日活动预告**（daily events report）—— 每晚 19:00 预告次日活动
 2. **通用问答**（answer general questions）
 3. **互动响应**（response to interactions）
 4. **关键词主动触发**（proactive response to keywords trigger）
@@ -124,12 +124,12 @@ SolaApiSource  ──失败──▶  SolaIcsSource  ──失败──▶  Loca
 **不在播报时直接打上游**。定时任务把活动导入本地 SQLite，播报只读库。这样上游抖动不会影响播报，改播报范围也不需要重新拉数据。
 
 ```
-Social Layer            每天 08:30            SQLite events 表        每天 09:00
-api.sola.day     ──── sync_events ────▶   (source, event_id) 唯一   ──── 读库 ────▶  群内播报
-未来 SYNC_HORIZON_DAYS 天                                              查询窗口 = DAILY_REPORT_DAYS_AHEAD
+Social Layer          08:30 / 18:30           SQLite events 表         每天 19:00
+api.sola.day     ──── sync_events ────▶   (source, event_id) 唯一   ──── 读库 ────▶  预告明日活动
+未来 SYNC_HORIZON_DAYS 天                                     查询窗口 = OFFSET_DAYS + DAYS_AHEAD
 ```
 
-导入时间比播报早 30 分钟，保证播报读到的是当天最新数据。启动时额外补一次（`SYNC_ON_STARTUP`），避免刚部署完库是空的。
+`SYNC_TIMES` 支持逗号分隔的多个时间点，当前配 `08:30,18:30`。晚上那次是必须的 —— 它在 19:00 播报前 30 分钟跑，保证白天新加的活动能赶上当晚的预告。启动时额外补一次（`SYNC_ON_STARTUP`），避免刚部署完库是空的。
 
 **幂等的三层保证**：
 
@@ -196,11 +196,28 @@ group 1 命中后阻断 group 2，是为了避免同一条消息既被当成提�
 
 ### 4.1 四项能力的实现要点
 
-**能力 1 · 每日播报**
+**能力 1 · 每日预告**
 
-`JobQueue.run_daily` 在 `DAILY_REPORT_TIME`（默认 09:00 Asia/Bangkok）触发，从库里查 `[今天 00:00, 今天+DAILY_REPORT_DAYS_AHEAD 23:59]` 窗口内的活动。当前配置 `DAILY_REPORT_DAYS_AHEAD=0`，即只播当天。
+`JobQueue.run_daily` 在 `DAILY_REPORT_TIME`（19:00 Asia/Bangkok）触发，从库里查
 
-查询条件是 `start_ts <= 窗口末 AND COALESCE(end_ts, start_ts) >= 窗口初`，即"与窗口有交集"而不是"开始于窗口内" —— 这样昨天开始、今天还在进行的跨天活动也会出现在今天的播报里。
+```
+[今天 + OFFSET_DAYS 的 00:00, 今天 + OFFSET_DAYS + DAYS_AHEAD 的 23:59:59]
+```
+
+窗口内的活动。当前配置 `OFFSET_DAYS=1, DAYS_AHEAD=0`，即**只播明天**。
+
+拆成两个参数而不是一个，是因为「播哪天开始」和「播几天」是正交的。组合表：
+
+| 效果 | OFFSET | AHEAD |
+|---|---|---|
+| 每晚预告明天（当前） | 1 | 0 |
+| 早上播今天 | 0 | 0 |
+| 每晚预告明天 + 后天 | 1 | 1 |
+| 今天起一整周 | 0 | 6 |
+
+查询条件是 `start_ts <= 窗口末 AND COALESCE(end_ts, start_ts) >= 窗口初`，即"与窗口有交集"而不是"开始于窗口内" —— 这样 7-28 开始、8-03 结束的跨天活动，在预告明天（7-31）时仍会出现。这类活动在分组排版时归到窗口首日而不是它自己的开始日，否则标题会显示成"7月28日"，读起来像过期信息。
+
+`/events` 命令**始终 `offset=0`**（从今天算起，默认一周）。群里有人随手问「最近有啥」时只回明天一天没有意义 —— 自动预告和手动查询是两种不同的使用场景。
 
 渲染用 `parse_mode=HTML` 而不是 MarkdownV2：后者要求转义 `_*[]()~>#+-=|{}.!`，而活动标题里这些字符满地都是（实测有中泰英混排、`&`、`#` 等），漏转义一个就整条消息发不出去。所有用户内容过 `html.escape`。
 
@@ -287,7 +304,7 @@ RestartSec=10
 
 **已验证**：
 
-- 30 个单元测试通过（渲染、时间窗、幂等、软删除、字段往返）
+- 41 个单元测试通过（渲染、时间窗与起始偏移、幂等、软删除、字段往返）
 - 真实端点导入 79 条活动，连续三次同步行数不变
 - bot 启动、两个定时任务正常调度、启动补同步执行成功
 - 播报消息真实投递成功（发到管理员私聊，未发群）

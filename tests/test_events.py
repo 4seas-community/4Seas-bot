@@ -89,3 +89,55 @@ def test_tomorrow_event_excluded_from_today_window():
         end=dt.datetime(2026, 7, 31, 13, 0, tzinfo=BKK),
     )
     assert not ev.overlaps(start, end)
+
+
+# ── 起始偏移（晚上预告次日）────────────────────────────────────────────
+
+
+def test_window_offset_one_is_tomorrow_only():
+    """每晚 19:00 播明天：窗口必须整个落在明天，不含今天。"""
+    now = dt.datetime(2026, 7, 30, 19, 0, tzinfo=BKK)
+    start, end = day_window(0, BKK, now=now, offset_days=1)
+    assert start == dt.datetime(2026, 7, 31, 0, 0, tzinfo=BKK)
+    assert end.date() == dt.date(2026, 7, 31) and end.hour == 23
+
+
+def test_todays_remaining_event_excluded_from_tomorrow_preview():
+    """19:00 播报时，今晚 20:00 那场不该出现在'明天'的预告里。"""
+    start, end = day_window(0, BKK, now=dt.datetime(2026, 7, 30, 19, 0, tzinfo=BKK), offset_days=1)
+    tonight = Event(
+        id="tonight",
+        title="今晚 20:00",
+        start=dt.datetime(2026, 7, 30, 20, 0, tzinfo=BKK),
+        end=dt.datetime(2026, 7, 30, 22, 0, tzinfo=BKK),
+    )
+    assert not tonight.overlaps(start, end)
+
+
+def test_tomorrow_event_included_in_tomorrow_preview():
+    start, end = day_window(0, BKK, now=dt.datetime(2026, 7, 30, 19, 0, tzinfo=BKK), offset_days=1)
+    tomorrow = Event(
+        id="tmr",
+        title="明天 11:00",
+        start=dt.datetime(2026, 7, 31, 11, 0, tzinfo=BKK),
+        end=dt.datetime(2026, 7, 31, 13, 0, tzinfo=BKK),
+    )
+    assert tomorrow.overlaps(start, end)
+
+
+def test_multiday_event_spanning_tomorrow_is_included():
+    """7-28 开始、8-03 结束的活动，明天仍在进行，预告里要有。"""
+    start, end = day_window(0, BKK, now=dt.datetime(2026, 7, 30, 19, 0, tzinfo=BKK), offset_days=1)
+    week = Event(
+        id="week",
+        title="Residency Week",
+        start=dt.datetime(2026, 7, 28, 9, 0, tzinfo=BKK),
+        end=dt.datetime(2026, 8, 3, 18, 0, tzinfo=BKK),
+    )
+    assert week.overlaps(start, end)
+
+
+def test_offset_zero_keeps_old_behaviour():
+    """默认 offset=0 时行为不变 —— /events 仍然从今天算起。"""
+    now = dt.datetime(2026, 7, 30, 19, 0, tzinfo=BKK)
+    assert day_window(0, BKK, now=now) == day_window(0, BKK, now=now, offset_days=0)

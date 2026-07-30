@@ -76,23 +76,46 @@ def render_event(ev: Event, index: int | None = None) -> str:
     return "\n".join(lines)
 
 
+def day_label(day: dt.date, today: dt.date) -> str:
+    """相对今天的口语化日期标签。"""
+    delta = (day - today).days
+    if delta == 0:
+        return "今天"
+    if delta == 1:
+        return "明天"
+    if delta == 2:
+        return "后天"
+    return fmt_date(day)
+
+
 def render_daily_report(
     events: list[Event],
     *,
     days_ahead: int,
     today: dt.date,
+    offset_days: int = 0,
     source: str | None = None,
 ) -> str:
-    """每日播报。days_ahead=0 时按单日排版,否则按日期分组。"""
-    scope = "今日活动" if days_ahead == 0 else f"近 {days_ahead + 1} 天活动"
-    header = f"📅 <b>4Seas {scope}</b> · {fmt_date(today)}"
+    """每日播报。
+
+    offset_days=1 & days_ahead=0 → 「明日活动」（晚上预告次日）。
+    days_ahead>0 时按日期分组排版。
+    """
+    first_day = today + dt.timedelta(days=offset_days)
+    label = day_label(first_day, today)
+
+    if days_ahead == 0:
+        scope = f"{label}的活动"
+    else:
+        scope = f"{label}起 {days_ahead + 1} 天的活动"
+    header = f"📅 <b>4Seas {scope}</b> · {fmt_date(first_day)}"
 
     if not events:
         return (
             f"{header}\n\n"
-            "今天没有安排活动 ☕\n\n"
+            f"{label}没有安排活动 ☕\n\n"
             '想办一场?到 <a href="https://app.sola.day/event/4seas">Social Layer</a> 发布,'
-            "明天的播报就会自动带上。"
+            "下一次播报就会自动带上。"
         )
 
     blocks = [header, ""]
@@ -104,11 +127,10 @@ def render_daily_report(
     else:
         current: dt.date | None = None
         for ev in events:
-            day = ev.local_start.date()
+            day = max(ev.local_start.date(), first_day)  # 跨天活动归到窗口首日
             if day != current:
                 current = day
-                label = "今天" if day == today else fmt_date(day)
-                blocks.append(f"───── <b>{label}</b> ─────")
+                blocks.append(f"───── <b>{day_label(day, today)}</b> ─────")
                 blocks.append("")
             blocks.append(render_event(ev))
             blocks.append("")

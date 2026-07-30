@@ -71,9 +71,10 @@ def build_application() -> Application:
         log.error("JobQueue 不可用 —— 请装 python-telegram-bot[job-queue]，定时任务全部不会运行")
         return app
 
-    # 先同步、后播报。sync_time 默认比 daily_report_time 早半小时，
-    # 保证播报读到的是当天最新的活动。
-    app.job_queue.run_daily(sync_events_job, time=settings.sync_at, name="sync_events")
+    # 先同步、后播报。SYNC_TIMES 里至少要有一个时间点早于 DAILY_REPORT_TIME，
+    # 保证播报读到的是最新活动。
+    for i, at in enumerate(settings.sync_at):
+        app.job_queue.run_daily(sync_events_job, time=at, name="sync_events" if i == 0 else f"sync_events_{i}")
     app.job_queue.run_daily(daily_report_job, time=settings.report_time, name="daily_report")
 
     if settings.sync_on_startup:
@@ -82,10 +83,10 @@ def build_application() -> Application:
 
     log.info(
         "定时任务已调度：同步 %s（未来 %d 天）→ 播报 %s（%s），时区 %s，目标群 %s",
-        settings.sync_time,
+        settings.sync_times,
         settings.sync_horizon_days,
         settings.daily_report_time,
-        "仅当天" if settings.daily_report_days_ahead == 0 else f"当天+{settings.daily_report_days_ahead}天",
+        settings.report_scope_label,
         settings.tz,
         settings.report_chat_id,
     )
