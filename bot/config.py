@@ -19,6 +19,14 @@ def _parse_ids(raw: str) -> list[int]:
     return [int(p.strip()) for p in raw.split(",") if p.strip()]
 
 
+# cached_property 把解析结果存进实例 __dict__，所以运行时改了字段之后必须
+# 把这些键删掉，否则页面上显示已生效、实际还在用旧值。
+_CACHED = (
+    "admin_ids", "allowed_chats", "muted_chat_ids", "zone",
+    "report_time", "sync_at", "report_chat_id", "report_scope_label",
+)
+
+
 class Settings(BaseSettings):
     # BOT_SETTINGS_ENV_FILE 让测试把 .env 关掉（设为空串）。不这样的话，本机有
     # .env、CI 没有，同一套测试在两边跑的是不同配置。
@@ -156,4 +164,28 @@ class Settings(BaseSettings):
         return not self.allowed_chats or chat_id in self.allowed_chats
 
 
+    def apply_overrides(self, overrides: dict) -> None:
+        """就地套用运行时配置。
+
+        必须是就地改：settings 是被各模块 `from ..config import settings` 直接
+        持有的单例，换一个新对象出来只有本模块看得见。
+        """
+        for key, value in overrides.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+        for name in _CACHED:
+            self.__dict__.pop(name, None)
+
+
 settings = Settings()  # type: ignore[call-arg]
+
+# .env 是基线，data/runtime_config.json 覆盖它。放在这里而不是做成
+# pydantic settings source，是因为同一段逻辑还要在管理页保存后再跑一次。
+try:
+    from .services.runtime_config import load as _load_overrides
+
+    settings.apply_overrides(_load_overrides())
+except Exception:  # 覆盖层坏掉不该让 bot 起不来，.env 本身就是可用配置
+    import logging
+
+    logging.getLogger(__name__).exception("runtime config overrides ignored")

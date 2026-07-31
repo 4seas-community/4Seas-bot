@@ -25,6 +25,7 @@ from ..config import settings
 from ..deps import custom_commands, kb, keyword_rules, settings as _s, storage
 from ..services.command_store import CommandStore, StoreError
 from ..services.custom_commands import RESERVED, check_telegram_html
+from ..services import runtime_config as rc
 
 log = logging.getLogger(__name__)
 
@@ -161,6 +162,124 @@ class AdminServer:
             return web.json_response({"error": str(exc)}, status=500)
         return web.json_response({"ok": True, "detail": detail, "chat_id": chat_id})
 
+    # ── settings ──────────────────────────────────────────────────────
+    async def _settings_get(self, request: web.Request) -> web.Response:
+        overrides = rc.load()
+        return web.json_response({
+            "fields": [
+                {
+                    "key": f.key, "kind": f.kind, "label": f.label, "help": f.help,
+                    "group": f.group, "choices": list(f.choices),
+                    "min": f.minimum, "max": f.maximum,
+                    "reschedules": f.reschedules, "sensitive": f.sensitive,
+                    "value": getattr(_s, f.key, None),
+                    "overridden": f.key in overrides,
+                }
+                for f in rc.FIELDS
+            ],
+            "timezone": _s.tz,
+        })
+
+    async def _verify_chat(self, chat_id: int) -> str | None:
+        """Confirm the bot can actually post there. Returns a problem, or None.
+
+        Pointing the digest at a chat the bot was never added to fails silently at
+        19:00 — the job runs, the send raises, and the only trace is a log line
+        nobody reads. Check it while someone is looking at the screen.
+        """
+        bot = self.manager.app.bot
+        try:
+            chat = await bot.get_chat(chat_id)
+        except Exception as exc:
+            return (
+                f"can't reach chat {chat_id}: {exc}. "
+                "Add the bot to that chat first, then try again."
+            )
+        if chat.type == "private":
+            return None
+
+        try:
+            me = await bot.get_chat_member(chat_id, bot.id)
+        except Exception as exc:
+            return f"the bot is not a member of {chat.title!r}: {exc}"
+        if me.status not in ("administrator", "creator"):
+            return (
+                f"the bot is in {chat.title!r} but only a {me.status}. "
+                "Make it an administrator, or it may be unable to post."
+            )
+        return None
+
+    async def _settings_put(self, request: web.Request) -> web.Response:
+        body = await request.json()
+        submitted = body if isinstance(body, dict) else {}
+
+        cleaned: dict = {}
+        try:
+            for key, raw in submitted.items():
+                field = rc.BY_KEY.get(key)
+                if field is None:
+                    continue  # unknown keys are ignored, not an error
+                cleaned[key] = rc.coerce(field, raw)
+        except rc.ConfigError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+
+        # Verify chat membership before persisting anything.
+        target = cleaned.get("daily_report_chat_id")
+        if target is not None and target != _s.report_chat_id:
+            problem = await self._verify_chat(int(target))
+            if problem:
+                return web.json_response({"error": problem}, status=400)
+
+        overrides = {**rc.load(), **cleaned}
+        rc.save(overrides)
+        _s.apply_overrides(overrides)
+
+        notes: list[str] = []
+        if any(rc.BY_KEY[k].reschedules for k in cleaned):
+            notes.append(self._reschedule())
+        if _s.report_chat_id in _s.muted_chat_ids:
+            notes.append(
+                f"⚠️ chat {_s.report_chat_id} is on the muted list — the digest will not go out"
+            )
+        return web.json_response({"ok": True, "notes": notes})
+
+    def _reschedule(self) -> str:
+        """Re-register the daily jobs so a new time takes effect without a restart."""
+        from ..jobs.daily_report import daily_report_job
+        from ..jobs.sync_events import sync_events_job
+
+        jq = self.manager.app.job_queue
+        if jq is None:
+            return "job queue unavailable — restart to apply the new times"
+
+        for job in jq.jobs():
+            if job.name and (job.name.startswith("sync_events") or job.name == "daily_report"):
+                job.schedule_removal()
+        for i, at in enumerate(_s.sync_at):
+            jq.run_daily(sync_events_job, time=at,
+                         name="sync_events" if i == 0 else f"sync_events_{i}")
+        jq.run_daily(daily_report_job, time=_s.report_time, name="daily_report")
+        log.info("rescheduled: sync %s, digest %s", _s.sync_times, _s.daily_report_time)
+        return f"rescheduled — sync {_s.sync_times}, digest {_s.daily_report_time}"
+
+    async def _check_chat(self, request: web.Request) -> web.Response:
+        """Pre-flight a chat id from the form, before anything is saved."""
+        body = await request.json()
+        try:
+            chat_id = int(str(body.get("chat_id", "")).strip())
+        except ValueError:
+            return web.json_response({"problem": "not a numeric chat id"})
+        problem = await self._verify_chat(chat_id)
+        if problem:
+            return web.json_response({"problem": problem})
+        try:
+            chat = await self.manager.app.bot.get_chat(chat_id)
+            title = chat.title or chat.username or "private chat"
+            members = await self.manager.app.bot.get_chat_member_count(chat_id)
+            return web.json_response({"problem": None, "ok": f"{title} — {members} members"})
+        except Exception:
+            return web.json_response({"problem": None, "ok": "reachable"})
+
     async def _reload(self, request: web.Request) -> web.Response:
         kb.load()
         keyword_rules.load()
@@ -199,6 +318,9 @@ class AdminServer:
             web.post("/api/commands/{name}/toggle", self._toggle),
             web.post("/api/check-html", self._check_html),
             web.post("/api/send-digest", self._send_digest),
+            web.get("/api/settings", self._settings_get),
+            web.put("/api/settings", self._settings_put),
+            web.post("/api/check-chat", self._check_chat),
             web.post("/api/reload", self._reload),
             web.get("/api/status", self._status),
         ])
