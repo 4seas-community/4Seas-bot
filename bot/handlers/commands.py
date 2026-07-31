@@ -11,7 +11,7 @@ from telegram.constants import ChatAction, ParseMode
 from telegram.ext import ContextTypes
 
 from ..deps import custom_commands, kb, keyword_rules, llm_service, settings, storage
-from ..jobs.daily_report import load_events, send_daily_report
+from ..jobs.daily_report import load_events
 from ..jobs.sync_events import sync_events
 from ..services.digest_writer import digest_writer
 from ..render import SOLA_URL, esc, render_daily_report, render_editorial
@@ -34,8 +34,7 @@ Every evening at {time} I post what's happening <b>tomorrow</b>."""
 ADMIN_HELP = """
 <b>Admin:</b>
 /sync — import events from Social Layer now (idempotent, safe to repeat)
-/report — post the digest now
-/reload — reload FAQ and keyword rules
+/reload — reload FAQ, keyword rules and custom commands
 /status — runtime status"""
 
 
@@ -188,15 +187,6 @@ async def cmd_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 # ── Admin commands ────────────────────────────────────────────────────────
-
-
-async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    _log_cmd(update, "report")
-    if not _is_admin(update):
-        return
-    target = settings.report_chat_id or update.effective_chat.id
-    result = await send_daily_report(context, target, force=True)
-    await update.effective_message.reply_text(f"✅ {result}")
 
 
 async def cmd_reload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

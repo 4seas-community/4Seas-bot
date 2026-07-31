@@ -22,7 +22,7 @@ from pathlib import Path
 from aiohttp import web
 
 from ..config import settings
-from ..deps import custom_commands, kb, keyword_rules, storage
+from ..deps import custom_commands, kb, keyword_rules, settings as _s, storage
 from ..services.command_store import CommandStore, StoreError
 from ..services.custom_commands import RESERVED, check_telegram_html
 
@@ -130,6 +130,37 @@ class AdminServer:
             return web.json_response({"problem": None})
         return web.json_response({"problem": check_telegram_html(str(body.get("reply", "")))})
 
+    async def _send_digest(self, request: web.Request) -> web.Response:
+        """Send the digest now.
+
+        This lives here rather than as a /report chat command because it is an
+        ops action, not something a group member does — and because the digest
+        goes to DAILY_REPORT_CHAT_ID, not to wherever the command was typed,
+        which made a chat command genuinely dangerous to hand out.
+
+        Real use: the 19:00 job is `run_daily`, so a missed evening (laptop
+        asleep) is simply never sent. This is the only way to catch up.
+        """
+        chat_id = _s.report_chat_id
+        if chat_id is None:
+            return web.json_response({"error": "no DAILY_REPORT_CHAT_ID configured"}, status=400)
+        if chat_id in _s.muted_chat_ids:
+            return web.json_response(
+                {"error": f"chat {chat_id} is muted — nothing would be sent"}, status=400
+            )
+
+        from ..jobs.daily_report import send_daily_report
+
+        class _Ctx:  # send_daily_report only ever touches .bot
+            bot = self.manager.app.bot
+
+        try:
+            detail = await send_daily_report(_Ctx(), chat_id, force=True)
+        except Exception as exc:
+            log.error("admin UI digest send failed: %s", exc, exc_info=True)
+            return web.json_response({"error": str(exc)}, status=500)
+        return web.json_response({"ok": True, "detail": detail, "chat_id": chat_id})
+
     async def _reload(self, request: web.Request) -> web.Response:
         kb.load()
         keyword_rules.load()
@@ -167,6 +198,7 @@ class AdminServer:
             web.delete("/api/commands/{name}", self._delete),
             web.post("/api/commands/{name}/toggle", self._toggle),
             web.post("/api/check-html", self._check_html),
+            web.post("/api/send-digest", self._send_digest),
             web.post("/api/reload", self._reload),
             web.get("/api/status", self._status),
         ])

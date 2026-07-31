@@ -566,3 +566,41 @@ async def test_events_command_makes_no_llm_call(monkeypatch):
     assert called["n"] == 0
     assert copy.generated is False
     assert copy.lines["e1"], "still grounded in the organiser's own words"
+
+
+# ── /report moved into the admin UI ───────────────────────────────────
+
+
+def test_report_is_no_longer_a_chat_command():
+    """It overlapped visibly with /events, and it posted to DAILY_REPORT_CHAT_ID
+    rather than to the chat you typed it in — a genuinely dangerous shape for a
+    command anyone could see in the group."""
+    root = pathlib.Path(__file__).resolve().parent.parent
+    assert "cmd_report" not in (root / "bot" / "handlers" / "commands.py").read_text()
+    assert 'CommandHandler("report"' not in (root / "bot" / "__main__.py").read_text()
+    assert "/report" not in (root / "bot" / "handlers" / "commands.py").read_text()
+
+
+def test_send_digest_capability_still_exists():
+    """Removing the command must not remove the ability to catch up a missed
+    evening — run_daily never replays a skipped run."""
+    root = pathlib.Path(__file__).resolve().parent.parent
+    server = (root / "bot" / "web" / "server.py").read_text()
+    assert "_send_digest" in server
+    assert '"/api/send-digest"' in server
+    assert "send_daily_report" in server
+
+
+def test_send_digest_refuses_a_muted_target():
+    """Otherwise the button reports success while the guard silently drops it."""
+    root = pathlib.Path(__file__).resolve().parent.parent
+    server = (root / "bot" / "web" / "server.py").read_text()
+    body = server[server.index("async def _send_digest"):server.index("async def _reload")]
+    assert "muted_chat_ids" in body
+    assert "report_chat_id" in body
+
+
+def test_report_name_is_free_for_custom_commands():
+    """Now that the built-in is gone, an admin may define their own /report."""
+    from bot.services.custom_commands import RESERVED
+    assert "report" not in RESERVED
