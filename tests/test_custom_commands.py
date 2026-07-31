@@ -179,3 +179,60 @@ def test_shipped_config_files_are_valid():
     """The examples in data/commands/ must actually parse."""
     r = CustomCommandRegistry("data/commands").load()
     assert r.ok, f"shipped command configs have errors: {r.errors}"
+
+
+# ── Telegram HTML validation ──────────────────────────────────────────
+#
+# A single unclosed tag makes Telegram reject the entire message, and the failure
+# only surfaces when someone runs the command — in the group, silently. This
+# actually happened: an admin saved `Password: <code>123456` through the web UI
+# and /wifi was dead until someone read the logs.
+
+
+@pytest.mark.parametrize("bad,hint", [
+    ("Password: <code>123456", "unclosed"),
+    ("<b>bold forever", "unclosed"),
+    ("</b> stray close", "no matching opening"),
+    ("<i><b>x</i></b>", "out of order"),
+    ("<marquee>nope</marquee>", "not supported"),
+    ("<script>alert(1)</script>", "not supported"),
+])
+def test_invalid_html_is_rejected_at_save_time(commands_dir, bad, hint):
+    write(commands_dir, "a.yaml", f'- command: x\n  reply: "{bad}"\n')
+    r = CustomCommandRegistry(commands_dir).load()
+    assert r.commands == []
+    assert any(hint in e for e in r.errors), r.errors
+
+
+@pytest.mark.parametrize("good", [
+    "plain text with no markup at all",
+    "<b>bold</b> and <i>italic</i>",
+    "Network: <code>4Seas-Guest</code>",
+    '<a href="https://app.sola.day/event/4seas">calendar</a>',
+    "<b>nested <i>tags</i> close in order</b>",
+    "<pre>block</pre> <s>strike</s> <u>under</u>",
+])
+def test_valid_telegram_html_passes(commands_dir, good):
+    """Over-strict validation would block perfectly good replies."""
+    write(commands_dir, "a.yaml", f"- command: x\n  reply: |\n    {good}\n")
+    r = CustomCommandRegistry(commands_dir).load()
+    assert r.ok, r.errors
+    assert len(r.commands) == 1
+
+
+def test_html_is_not_checked_for_plain_text_mode(commands_dir):
+    """parse_mode: none means Telegram never parses it, so < > are just characters."""
+    write(commands_dir, "a.yaml",
+          '- command: x\n  reply: "a < b and c > d"\n  parse_mode: none\n')
+    assert CustomCommandRegistry(commands_dir).load().ok
+
+
+def test_the_shipped_wifi_example_is_valid_html():
+    """The template admins copy from must itself pass."""
+    from bot.services.custom_commands import check_telegram_html
+    import yaml, pathlib
+    for path in pathlib.Path("data/commands").glob("*.y*ml"):
+        for entry in (yaml.safe_load(path.read_text(encoding="utf-8")) or []):
+            if isinstance(entry, dict) and entry.get("parse_mode", "HTML") == "HTML":
+                problem = check_telegram_html(str(entry.get("reply", "")))
+                assert problem is None, f"{path.name} /{entry.get('command')}: {problem}"
