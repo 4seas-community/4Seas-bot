@@ -13,14 +13,14 @@ from telegram.ext import ContextTypes
 from ..deps import custom_commands, kb, keyword_rules, llm_service, settings, storage
 from ..jobs.daily_report import load_events, send_daily_report
 from ..jobs.sync_events import sync_events
-from ..render import SOLA_URL, esc, render_daily_report
+from ..render import SOLA_URL, esc, render_daily_report, render_editorial
 
 log = logging.getLogger(__name__)
 
 HELP = """👋 I'm the <b>4Seas community bot</b>.
 
 <b>For everyone:</b>
-/events — what's coming up
+/events — what's on tomorrow (<code>/events 3</code> for more days)
 /ask &lt;question&gt; — ask anything, answered from the community FAQ
 /faq — list FAQ topics
 /help — this message
@@ -82,24 +82,28 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_events(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Manual lookup. Always counts from today — unlike the evening digest,
-    which previews tomorrow only.
+    """Manual lookup, same window as the evening digest by default.
 
-    /events    → today + EVENTS_COMMAND_DAYS more days
-    /events 3  → today + 3 more days
+    /events    → tomorrow (exactly what the 19:00 post will cover)
+    /events 3  → tomorrow plus 3 more days
+
+    Deliberately shares DAILY_REPORT_OFFSET_DAYS / DAILY_REPORT_DAYS_AHEAD with
+    the digest rather than having its own setting: if someone checks /events and
+    then sees a different set of events posted at 19:00, that reads as a bug.
     """
-    days = settings.events_command_days
+    days = settings.daily_report_days_ahead
+    offset = settings.daily_report_offset_days
     if context.args:
         try:
             days = max(0, min(30, int(context.args[0])))
         except ValueError:
             pass
-    _log_cmd(update, "events", f"days={days}")
+    _log_cmd(update, "events", f"offset={offset} days={days}")
 
     msg = update.effective_message
     await context.bot.send_chat_action(msg.chat_id, ChatAction.TYPING)
     try:
-        events = await load_events(days, offset_days=0)
+        events = await load_events(days, offset_days=offset)
     except Exception as exc:
         log.error("failed to load events: %s", exc, exc_info=True)
         await msg.reply_text(f"😵 Can't reach the event data right now. Try again shortly, or see {SOLA_URL}")
@@ -107,11 +111,25 @@ async def cmd_events(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     # DIGEST_STYLE=editorial 在这里会落到 compact：editorial 的每场一句推荐要
     # 走一次 LLM，而 /events 是一周的量、随时可能被任何人触发。列表就够了。
-    style = "compact" if settings.digest_style == "editorial" else settings.digest_style
-    text = render_daily_report(
-        events, days_ahead=days, today=dt.datetime.now(settings.zone).date(),
-        offset_days=0, style=style,
-    )
+    today = dt.datetime.now(settings.zone).date()
+    if settings.digest_style == "editorial" and days == 0:
+        # Single day → same editorial layout as the 19:00 post, but without an LLM
+        # call: /events is unmetered and anyone in the group can spam it. The
+        # organisers' own descriptions carry the recommendation lines.
+        from ..services.digest_writer import digest_writer
+        copy = await digest_writer.write(
+            events, target_date=today + dt.timedelta(days=offset),
+            recent=[], days_since_invite=None, use_llm=False,
+        )
+        text = render_editorial(
+            events, target_date=today + dt.timedelta(days=offset), today=today,
+            lines=copy.lines,
+        )
+    else:
+        style = "compact" if settings.digest_style == "editorial" else settings.digest_style
+        text = render_daily_report(
+            events, days_ahead=days, today=today, offset_days=offset, style=style,
+        )
     await msg.reply_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
 
