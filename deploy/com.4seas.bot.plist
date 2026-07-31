@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  macOS launchd agent — runs the bot in the background on your own Mac.
+
+  Install:
+    cp deploy/com.4seas.bot.plist ~/Library/LaunchAgents/
+    # edit the two paths below if the repo lives somewhere else
+    launchctl load  ~/Library/LaunchAgents/com.4seas.bot.plist
+    launchctl start com.4seas.bot
+
+  Status / logs:
+    launchctl list | grep 4seas
+    tail -f /Users/jason/Dev/tools/4Seas-bot/data/bot.log
+
+  Stop / uninstall:
+    launchctl stop   com.4seas.bot
+    launchctl unload ~/Library/LaunchAgents/com.4seas.bot.plist
+
+  After editing .env:
+    launchctl kickstart -k gui/$(id -u)/com.4seas.bot
+
+  Note: a LaunchAgent only runs while you are logged in, and macOS suspends it
+  when the machine sleeps. The 19:00 digest will be skipped on any evening the
+  laptop is asleep — see deploy/README.md.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.4seas.bot</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jason/Dev/tools/4Seas-bot/.venv/bin/python</string>
+        <string>-m</string>
+        <string>bot</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jason/Dev/tools/4Seas-bot</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <!-- Back off between restarts so a crash loop can't hammer the Telegram API. -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jason/Dev/tools/4Seas-bot/data/bot.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jason/Dev/tools/4Seas-bot/data/bot.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
