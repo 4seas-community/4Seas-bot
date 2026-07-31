@@ -13,7 +13,7 @@ Telegram: [@zuchiangmaibot](https://t.me/zuchiangmaibot) · 活动数据来自 [
 
 | # | 能力 | 说明 |
 |---|---|---|
-| 1 | **每日活动预告** | 每天晚上 19:00（Asia/Bangkok）自动预告**明天**有什么活动 |
+| 1 | **每日活动预告** | 每天晚上 19:00（Asia/Bangkok）预告**明天**有什么活动，一行一场，点标题跳详情 |
 | 2 | **通用问答** | `/ask` 或 @ 它，基于社区 FAQ 知识库回答；答不上来的老实说答不上来，不编 |
 | 3 | **互动响应** | 新成员欢迎、被回复时接话、常用命令（`/events` `/faq` `/help`） |
 | 4 | **关键词主动触发** | 群里出现「住宿」「签证」「怎么报名」这类词，自动补一条有用的信息 |
@@ -114,34 +114,32 @@ TZ=Asia/Bangkok
 
 ## 三、运营怎么改内容（不用碰代码）
 
-两个文件，改完 bot 自动热加载：
+两个文件加一个目录，改完发 `/reload` 即生效（或在管理页上点）：
 
 ### `data/faq.md` — 问答知识库
 
 普通 Markdown，按 `##` 分节。bot 会检索最相关的几节喂给模型，模型只能基于这些内容回答。
 
 ```markdown
-## 怎么加入 4Seas 社区？
-访问 https://app.sola.day/event/4seas ,或直接在群里问管理员。
+## How do I join the community
+<!-- also: 怎么加入 如何加入 报名 เข้าร่วม -->
 
-## 清迈的住宿怎么安排？
-Residency 期间提供 co-living,详见 ...
+Events are open — pick one on Social Layer and show up.
 ```
+
+**bot 一律用英文回复**（`REPLY_LANGUAGE`），但成员会用中文、泰文提问。
+BM25 是纯词面匹配，中文查询对不上英文正文，所以每条加一行
+`<!-- also: ... -->` 隐藏别名：参与检索，不进答案、不给模型看。
+少了它，中文提问会全部落到"我不确定"。
 
 ### `data/keywords.yaml` — 关键词触发规则
 
 ```yaml
-- id: visa
-  match: ["签证", "visa", "落地签"]
+- id: join
+  match: ["how to join", "怎么加入", "如何加入"]   # 中英都写,回复统一英文
   cooldown: 3600          # 同一个群 1 小时内最多触发一次,防刷屏
   reply: |
-    🛂 泰国签证相关整理在这里:<链接>
-    有具体问题可以 @管理员
-
-- id: housing
-  match: ["住宿", "housing", "co-living"]
-  cooldown: 3600
-  reply: "🏠 住宿安排见 ..."
+    🙌 Welcome! All events live on <a href="https://app.sola.day/event/4seas">Social Layer</a>.
 ```
 
 `cooldown` 是必填的 —— 社区 bot 最容易翻车的地方就是关键词刷屏。
@@ -167,16 +165,62 @@ Residency 期间提供 co-living,详见 ...
 
 ---
 
-## 五、成本与安全
+## 五、自定义命令（不用写代码）
+
+在 `data/commands/` 放一个 YAML，群里发 `/reload`，命令立刻生效。删掉文件再 `/reload` 就移除。
+
+```yaml
+- command: wifi              # 必填 → /wifi
+  description: Venue Wi-Fi   # 显示在 /help 和 Telegram 命令菜单里
+  reply: |                   # 必填，Telegram HTML
+    📶 <b>Wi-Fi</b>
+    Network: <code>4Seas-Guest</code>
+  enabled: true              # false = 保留配置但不注册
+  admin_only: false
+  scope: all                 # all | group | private
+```
+
+配置写错不会拖垮其它命令 —— `/reload` 会逐条报告哪个文件哪一行有问题，其余照常加载。
+内置命令名（`start help events ask faq sync report reload status`）不允许被覆盖，
+否则一个坏配置就能把 `/reload` 本身顶掉，你再也改不回来。
+
+详见 [`data/commands/README.md`](data/commands/README.md)。
+
+## 六、管理页
+
+bot 启动时会同时起一个本地管理页，增删改停命令都能点，改完立刻生效：
+
+```
+http://127.0.0.1:8477/?token=<WEB_TOKEN>
+```
+
+启动日志里有完整链接。默认**只绑 127.0.0.1** —— 这个页面能改 bot 在 776 人群里说什么，
+不该直接对公网开。远程访问走 SSH 隧道：
+
+```bash
+ssh -N -L 8477:127.0.0.1:8477 user@host
+```
+
+`WEB_TOKEN` 留空的话每次启动随机生成并打进日志（链接会变）；填了才稳定。
+绑非回环地址而没显式设 token 时，管理页拒绝启动。
+
+管理页起不来（端口占用等）**不会影响 bot 本身** —— 只记一条 error，Telegram 照常跑。
+
+## 七、成本与安全
 
 - **LLM 只在 `/ask` 和 @ 时调用**，关键词触发走固定模板，不烧 token。
 - 每用户每小时问答次数上限，超了礼貌拒绝。
-- 群白名单：不在 `TELEGRAM_ALLOWED_CHATS` 里的群，bot 自动退出。
+- 群白名单：不在 `TELEGRAM_ALLOWED_CHATS` 里的群，bot **静默忽略**（不是退群）。
+  退群做成 opt-in（`LEAVE_UNKNOWN_CHATS`）—— 白名单少填一个 id 就自动退出正式群、
+  丢掉管理员身份，代价太大。
+- `TELEGRAM_MUTED_CHATS` 里的群：收消息但一句话不说。测试期把正式群放这里，
+  比从白名单里删掉安全。
+- 管理页默认只绑 127.0.0.1，且强制 token。
 - 所有密钥走环境变量，仓库里只有 `.env.example`。
 
 ---
 
-## 六、路线图
+## 八、路线图
 
 **一期（已完成）· Telegram**
 四项核心能力 + Social Layer 活动幂等导入 + 自托管部署。
@@ -190,7 +234,7 @@ Residency 期间提供 co-living,详见 ...
 
 ---
 
-## 七、文档
+## 九、文档
 
 - [技术设计文档](docs/TECH-DESIGN.md) —— 架构、数据源、框架选型对比、部署方案、里程碑
 

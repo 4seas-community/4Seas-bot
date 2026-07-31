@@ -99,8 +99,8 @@ class SyncResult:
 
     def __str__(self) -> str:
         return (
-            f"拉取 {self.fetched} · 新增 {self.inserted} · 更新 {self.updated} · "
-            f"无变化 {self.unchanged} · 下架 {self.removed}"
+            f"fetched {self.fetched} · new {self.inserted} · updated {self.updated} · "
+            f"unchanged {self.unchanged} · delisted {self.removed}"
         )
 
 

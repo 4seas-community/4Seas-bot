@@ -1,0 +1,15 @@
+# /wifi — the example from the original request.
+#
+# Disabled on purpose: the real network details aren't known. Fill in `reply`,
+# flip `enabled` to true, then send /reload in the group. That's the whole loop —
+# no restart, no deploy.
+
+- command: wifi
+  description: Venue Wi-Fi details
+  enabled: false
+  reply: |
+    📶 <b>Wi-Fi</b>
+    Network: <code>FILL-ME-IN</code>
+    Password: <code>FILL-ME-IN</code>
+
+    Trouble connecting? Ask whoever's running the venue.

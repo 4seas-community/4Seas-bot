@@ -20,10 +20,10 @@ from .commands import answer_question
 
 log = logging.getLogger(__name__)
 
-WELCOME = """👋 欢迎 {names} 加入 <b>4Seas Community</b>！
+WELCOME = """👋 Welcome to <b>4Seas Community</b>, {names}!
 
-发 /events 看看近期活动，发 /help 看我能做什么。
-有问题直接 @我 或者用 <code>/ask</code> 提问。"""
+Send /events to see what's coming up, or /help to see what I can do.
+Got a question? Just @ me, or use <code>/ask</code>."""
 
 
 async def on_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -31,9 +31,10 @@ async def on_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     members = [m for m in (msg.new_chat_members or []) if not m.is_bot]
     if not members:
         return
-    names = "、".join(esc(m.full_name) for m in members[:5])
+    log.info("新成员入群 | chat=%s 人数=%d", msg.chat_id, len(members))
+    names = ", ".join(esc(m.full_name) for m in members[:5])
     if len(members) > 5:
-        names += f" 等 {len(members)} 位"
+        names += f" and {len(members) - 5} more"
     await msg.reply_text(
         WELCOME.format(names=names), parse_mode=ParseMode.HTML, disable_web_page_preview=True
     )
@@ -56,6 +57,8 @@ async def on_mention(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not (is_reply_to_bot or is_mention):
         return
 
+    log.info("被%s | chat=%s user=%s", "回复" if is_reply_to_bot else "@", msg.chat_id,
+             update.effective_user.id if update.effective_user else "?")
     question = text.replace(mention, "").replace(mention.lower(), "").strip()
     await answer_question(update, context, question)
     # 已经作为提问处理过了，不要再让关键词规则对同一条消息二次回复

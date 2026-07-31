@@ -15,16 +15,26 @@ from .kb import Passage
 
 log = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """你是 4Seas 社区（泰国清迈）的助手机器人。
+SYSTEM_PROMPT = """You are the assistant bot for the 4Seas community in Chiang Mai, Thailand.
 
-规则（严格遵守）：
-1. 只能依据【参考资料】回答。资料里没有的，直接说"这个我不确定，建议在群里 @ 管理员问一下"，不要猜、不要编。
-2. 回答简短，控制在 3 句话以内，除非用户明确要求详细。
-3. 用提问者使用的语言回答（中文提问就用中文，英文就用英文，泰文就用泰文）。
-4. 不要说"根据参考资料"这类废话，直接给答案。
-5. 不使用 Markdown 语法，输出纯文本。"""
+## LANGUAGE — THIS OVERRIDES EVERYTHING ELSE
+You write **only** in {language}. This is absolute and has no exceptions.
 
-NO_ANSWER = "这个我不确定，建议在群里 @ 管理员问一下 🙋"
+Questions arrive in Chinese, Thai, Russian, and other languages. Do not mirror them.
+Read the question in whatever language it comes in, then write your entire answer
+in {language}. Not one word in any other language.
+
+If you catch yourself starting a sentence in the language of the question,
+stop and rewrite it in {language}.
+
+## Other rules
+1. Answer ONLY from the REFERENCE material provided. If the answer isn't there,
+   say you're not sure and suggest asking an admin in the group. Never guess, never invent.
+2. Keep it short — 3 sentences max, unless explicitly asked for detail.
+3. Don't say "according to the reference material" — just give the answer.
+4. Plain text only, no Markdown."""
+
+NO_ANSWER = "I'm not sure about that one — best to ask an admin here in the group 🙋"
 
 
 @dataclass(slots=True)
@@ -72,16 +82,24 @@ class LLMService:
         if not passages:
             return NO_ANSWER
 
-        context = "\n\n".join(f"### {p.title}\n{p.body}" for p in passages)
+        context = "\n\n".join(f"### {p.prompt_text}" for p in passages)
 
         # 没配模型时降级：直接回最相关的一条 FAQ 原文，好过什么都不给
         if not self.providers:
-            top = passages[0]
-            return f"{top.title}\n{top.body}".strip()
+            return passages[0].prompt_text.strip()
 
+        lang = settings.reply_language
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"【参考资料】\n{context}\n\n【问题】\n{question}"},
+            {"role": "system", "content": SYSTEM_PROMPT.format(language=lang)},
+            {
+                "role": "user",
+                # 语言要求在 user 消息末尾再钉一次。只写在 system 里时，DeepSeek 对
+                # 中文提问仍会用中文回答 —— 实测过。末尾复述是最后一道保险。
+                "content": (
+                    f"REFERENCE:\n{context}\n\nQUESTION:\n{question}\n\n"
+                    f"(Write your answer in {lang}, no matter what language the question used.)"
+                ),
+            },
         ]
 
         last_exc: Exception | None = None
@@ -102,9 +120,11 @@ class LLMService:
                 log.warning("LLM %s 调用失败：%s", provider.name, exc)
                 last_exc = exc
 
-        log.error("所有 LLM 均不可用：%s", last_exc)
-        top = passages[0]
-        return f"（AI 暂时不可用，先给你 FAQ 原文）\n\n{top.title}\n{top.body}".strip()
+        log.error("all LLM providers unavailable: %s", last_exc)
+        return (
+            "(AI is down right now — here's the raw FAQ entry)\n\n"
+            + passages[0].prompt_text.strip()
+        )
 
 
 llm_service = LLMService()

@@ -18,10 +18,28 @@ from telegram.ext import (
 
 from .config import settings
 from .handlers import commands, errors, interactions
+from .handlers.dynamic import DynamicCommandManager
 from .jobs.daily_report import daily_report_job
 from .jobs.sync_events import sync_events_job
+from .web.server import AdminServer
 
 log = logging.getLogger(__name__)
+
+
+async def _on_start(app: Application) -> None:
+    """Telegram 的命令菜单和 HTTP 服务都要等事件循环起来之后才能弄。"""
+    manager = app.bot_data.get("dynamic_commands")
+    if manager is not None:
+        await manager.publish_menu()
+    server = app.bot_data.get("admin_server")
+    if server is not None:
+        await server.start()
+
+
+async def _on_stop(app: Application) -> None:
+    server = app.bot_data.get("admin_server")
+    if server is not None:
+        await server.stop()
 
 
 def setup_logging() -> None:
@@ -67,6 +85,16 @@ def build_application() -> Application:
 
     app.add_error_handler(errors.on_error)
 
+    # group 5：配置驱动的自定义命令。放在 bot_data 里，/reload 才拿得到它。
+    manager = DynamicCommandManager(app)
+    manager.reload()
+    app.bot_data["dynamic_commands"] = manager
+
+    if settings.web_enabled:
+        app.bot_data["admin_server"] = AdminServer(manager)
+    app.post_init = _on_start
+    app.post_shutdown = _on_stop
+
     if app.job_queue is None:
         log.error("JobQueue 不可用 —— 请装 python-telegram-bot[job-queue]，定时任务全部不会运行")
         return app
@@ -104,6 +132,17 @@ def preflight() -> list[str]:
         warnings.append("未配置播报目标群 —— 每日播报会跳过")
     if not (settings.deepseek_api_key or settings.openai_api_key):
         warnings.append("未配置任何 LLM 密钥 —— 问答将只返回 FAQ 原文")
+    if settings.leave_unknown_chats:
+        warnings.append(
+            "LEAVE_UNKNOWN_CHATS=true —— 非白名单群会被自动退出，"
+            "白名单填错会丢掉正式群的管理员身份"
+        )
+    if muted := settings.muted_chat_ids:
+        warnings.append(f"静默名单生效，这些群里 bot 不会说任何话：{sorted(muted)}")
+    if settings.report_chat_id in settings.muted_chat_ids:
+        warnings.append(
+            f"播报目标群 {settings.report_chat_id} 在静默名单里 —— 每日播报不会发出"
+        )
     return warnings
 
 
@@ -114,7 +153,10 @@ def main() -> None:
 
     app = build_application()
     log.info("4Seas Bot 启动，开始长轮询…")
-    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    app.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=settings.drop_pending_updates,
+    )
 
 
 if __name__ == "__main__":

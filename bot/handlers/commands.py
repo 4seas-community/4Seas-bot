@@ -1,4 +1,4 @@
-"""命令处理：公开命令 + 管理员命令。"""
+"""Command handlers: public commands + admin commands."""
 
 from __future__ import annotations
 
@@ -10,35 +10,48 @@ from telegram import Update
 from telegram.constants import ChatAction, ParseMode
 from telegram.ext import ContextTypes
 
-from ..deps import kb, keyword_rules, llm_service, settings, storage
+from ..deps import custom_commands, kb, keyword_rules, llm_service, settings, storage
 from ..jobs.daily_report import load_events, send_daily_report
 from ..jobs.sync_events import sync_events
-from ..render import esc, render_daily_report
+from ..render import SOLA_URL, esc, render_daily_report
 
 log = logging.getLogger(__name__)
 
-HELP = """👋 我是 <b>4Seas 社区机器人</b>
+HELP = """👋 I'm the <b>4Seas community bot</b>.
 
-<b>大家都能用：</b>
-/events — 看看近期有什么活动
-/ask 你的问题 — 基于社区 FAQ 回答
-/faq — 列出 FAQ 目录
-/help — 这条消息
+<b>For everyone:</b>
+/events — what's coming up
+/ask &lt;question&gt; — ask anything, answered from the community FAQ
+/faq — list FAQ topics
+/help — this message
 
-也可以直接 @我 提问。
+You can also just @ me with a question.
 
-活动数据来自 <a href="https://app.sola.day/event/4seas">Social Layer</a>，
-每天晚上 {time} 我会在群里预告<b>明天</b>有什么活动。"""
+Event data comes from <a href="{sola}">Social Layer</a>.
+Every evening at {time} I post what's happening <b>tomorrow</b>."""
 
 ADMIN_HELP = """
-<b>管理员：</b>
-/sync — 立刻从 Social Layer 导入一次活动（幂等，可重复执行）
-/report — 立刻手动播报一次
-/reload — 重新加载 FAQ 和关键词规则
-/status — 运行状态"""
+<b>Admin:</b>
+/sync — import events from Social Layer now (idempotent, safe to repeat)
+/report — post the digest now
+/reload — reload FAQ and keyword rules
+/status — runtime status"""
 
 
-def _admin_only(update: Update) -> bool:
+def _log_cmd(update: Update, name: str, extra: str = "") -> None:
+    """Log every command. Without this you can't tell "handler never fired"
+    apart from "fired but sent nothing" when verifying behaviour."""
+    user = update.effective_user
+    chat = update.effective_chat
+    log.info(
+        "command /%s%s | user=%s(@%s) chat=%s(%s)",
+        name, f" {extra}" if extra else "",
+        user.id if user else "?", user.username if user else "?",
+        chat.id if chat else "?", (chat.title or chat.type) if chat else "?",
+    )
+
+
+def _is_admin(update: Update) -> bool:
     user = update.effective_user
     return settings.is_admin(user.id if user else None)
 
@@ -48,8 +61,20 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text = HELP.format(time=settings.daily_report_time)
-    if _admin_only(update):
+    _log_cmd(update, "help")
+    text = HELP.format(time=settings.daily_report_time, sola=SOLA_URL)
+
+    is_admin = _is_admin(update)
+    extras = [c for c in custom_commands.commands if is_admin or not c.admin_only]
+    if extras:
+        lines = "\n".join(
+            f"/{c.command}{' — ' + esc(c.description) if c.description else ''}"
+            f"{' <i>(admin)</i>' if c.admin_only else ''}"
+            for c in extras
+        )
+        text += f"\n\n<b>Also available:</b>\n{lines}"
+
+    if is_admin:
         text += ADMIN_HELP
     await update.effective_message.reply_text(
         text, parse_mode=ParseMode.HTML, disable_web_page_preview=True
@@ -57,10 +82,11 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_events(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """手动查活动。始终从今天算起（跟晚上预告次日的播报不同）。
+    """Manual lookup. Always counts from today — unlike the evening digest,
+    which previews tomorrow only.
 
-    /events    → 今天起 EVENTS_COMMAND_DAYS+1 天
-    /events 3  → 今天起 4 天
+    /events    → today + EVENTS_COMMAND_DAYS more days
+    /events 3  → today + 3 more days
     """
     days = settings.events_command_days
     if context.args:
@@ -68,42 +94,48 @@ async def cmd_events(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             days = max(0, min(30, int(context.args[0])))
         except ValueError:
             pass
+    _log_cmd(update, "events", f"days={days}")
 
     msg = update.effective_message
     await context.bot.send_chat_action(msg.chat_id, ChatAction.TYPING)
     try:
         events = await load_events(days, offset_days=0)
     except Exception as exc:
-        log.error("查活动失败：%s", exc, exc_info=True)
-        await msg.reply_text("😵 活动数据暂时取不到，稍后再试；或直接看 https://app.sola.day/event/4seas")
+        log.error("failed to load events: %s", exc, exc_info=True)
+        await msg.reply_text(f"😵 Can't reach the event data right now. Try again shortly, or see {SOLA_URL}")
         return
 
     text = render_daily_report(
-        events, days_ahead=days, today=dt.datetime.now(settings.zone).date(), offset_days=0
+        events, days_ahead=days, today=dt.datetime.now(settings.zone).date(),
+        offset_days=0, style=settings.digest_style,
     )
     await msg.reply_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
 
 async def cmd_faq(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _log_cmd(update, "faq")
     titles = kb.titles()
     if not titles:
-        await update.effective_message.reply_text("FAQ 还是空的，管理员正在整理 📝")
+        await update.effective_message.reply_text("The FAQ is still empty — admins are working on it 📝")
         return
     body = "\n".join(f"• {esc(t)}" for t in titles)
     await update.effective_message.reply_text(
-        f"📚 <b>社区 FAQ</b>\n\n{body}\n\n用 <code>/ask 你的问题</code> 提问。",
+        f"📚 <b>Community FAQ</b>\n\n{body}\n\nAsk with <code>/ask your question</code>.",
         parse_mode=ParseMode.HTML,
     )
 
 
 async def answer_question(update: Update, context: ContextTypes.DEFAULT_TYPE, question: str) -> None:
-    """问答主链路。/ask 和 @我 共用。"""
+    """Shared Q&A path for /ask and @-mentions."""
     msg = update.effective_message
     user = update.effective_user
     question = question.strip()
 
     if not question:
-        await msg.reply_text("问点什么呢？比如 <code>/ask 怎么加入社区</code>", parse_mode=ParseMode.HTML)
+        await msg.reply_text(
+            "What would you like to know? e.g. <code>/ask how do I join</code>",
+            parse_mode=ParseMode.HTML,
+        )
         return
 
     now = time.time()
@@ -111,12 +143,16 @@ async def answer_question(update: Update, context: ContextTypes.DEFAULT_TYPE, qu
         used = storage.ask_count_last_hour(user.id, now)
         if used >= settings.ask_rate_per_hour:
             await msg.reply_text(
-                f"⏳ 你这一小时已经问了 {used} 次，歇会儿再来吧（管理员不限）"
+                f"⏳ That's {used} questions in the past hour — give it a rest for a bit."
             )
             return
 
     await context.bot.send_chat_action(msg.chat_id, ChatAction.TYPING)
     passages = kb.search(question, top_k=3)
+    log.info(
+        "Q&A %r → FAQ hits: %s",
+        question[:40], [p.title for p in passages] or "none (will say it doesn't know)",
+    )
     answer = await llm_service.answer(question, passages)
 
     if user:
@@ -126,14 +162,16 @@ async def answer_question(update: Update, context: ContextTypes.DEFAULT_TYPE, qu
 
 
 async def cmd_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _log_cmd(update, "ask")
     await answer_question(update, context, " ".join(context.args or []))
 
 
-# ── 管理员命令 ────────────────────────────────────────────────────────────
+# ── Admin commands ────────────────────────────────────────────────────────
 
 
 async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _admin_only(update):
+    _log_cmd(update, "report")
+    if not _is_admin(update):
         return
     target = settings.report_chat_id or update.effective_chat.id
     result = await send_daily_report(context, target, force=True)
@@ -141,35 +179,68 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def cmd_reload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _admin_only(update):
+    """Hot-reload everything editable: FAQ, keyword rules, custom commands."""
+    _log_cmd(update, "reload")
+    if not _is_admin(update):
         return
+
     n_faq = kb.load()
     n_kw = keyword_rules.load()
+
+    lines = [
+        "🔄 <b>Reloaded</b>",
+        f"• FAQ: {n_faq} entries",
+        f"• Keyword rules: {n_kw}",
+    ]
+
+    manager = context.application.bot_data.get("dynamic_commands")
+    if manager is not None:
+        result = manager.reload()
+        await manager.publish_menu()
+        if result.commands:
+            listed = ", ".join(f"/{c.command}" for c in result.commands)
+            lines.append(f"• Custom commands: {len(result.commands)} — {listed}")
+        else:
+            lines.append("• Custom commands: none")
+        if result.skipped:
+            lines.append(f"• Disabled (enabled: false): {result.skipped}")
+        if result.errors:
+            # Report loudly. A silently-ignored typo means an admin edits a file,
+            # sees "reloaded", and never learns their command didn't register.
+            lines.append("")
+            lines.append(f"⚠️ <b>{len(result.errors)} config error(s)</b> — these were skipped:")
+            for err in result.errors[:8]:
+                lines.append(f"  • {esc(err)}")
+            if len(result.errors) > 8:
+                lines.append(f"  • … and {len(result.errors) - 8} more (see logs)")
+
     await update.effective_message.reply_text(
-        f"🔄 已重新加载：FAQ {n_faq} 条，关键词规则 {n_kw} 条"
+        "\n".join(lines), parse_mode=ParseMode.HTML, disable_web_page_preview=True
     )
 
 
 async def cmd_sync(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """手动触发一次导入。幂等，随便点几次都不会产生重复数据。"""
-    if not _admin_only(update):
+    """Manual import. Idempotent — running it repeatedly changes nothing."""
+    _log_cmd(update, "sync")
+    if not _is_admin(update):
         return
     msg = update.effective_message
     await context.bot.send_chat_action(msg.chat_id, ChatAction.TYPING)
     ok, detail = await sync_events()
-    await msg.reply_text(("✅ 同步完成\n" if ok else "❌ 同步失败\n") + detail)
+    await msg.reply_text(("✅ Sync complete\n" if ok else "❌ Sync failed\n") + detail)
 
 
 def _next_run(context: ContextTypes.DEFAULT_TYPE, name: str) -> str:
     jq = context.application.job_queue
     jobs = jq.get_jobs_by_name(name) if jq else []
     if jobs and jobs[0].next_t:
-        return jobs[0].next_t.astimezone(settings.zone).strftime("%m-%d %H:%M")
-    return "未调度"
+        return jobs[0].next_t.astimezone(settings.zone).strftime("%b %-d, %H:%M")
+    return "not scheduled"
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _admin_only(update):
+    _log_cmd(update, "status")
+    if not _is_admin(update):
         return
 
     today = dt.datetime.now(settings.zone).date()
@@ -182,35 +253,40 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             f"{last['source']}"
         )
         detail = (
-            f"拉取 {last['fetched']} · 新增 {last['inserted']} · 更新 {last['updated']} · "
-            f"无变化 {last['unchanged']} · 下架 {last['removed']}"
+            f"fetched {last['fetched']} · new {last['inserted']} · updated {last['updated']} · "
+            f"unchanged {last['unchanged']} · delisted {last['removed']}"
         )
         err = esc(last["error"]) if last["error"] else None
     else:
-        sync_line, detail, err = "尚未同步过", "", None
+        sync_line, detail, err = "never synced", "", None
 
     lines = [
-        "<b>📊 运行状态</b>",
+        "<b>📊 Status</b>",
         "",
-        "<b>活动库</b>",
-        f"  在架 {stats['live']} / 总计 {stats['total']} 条",
-        f"  上次同步：{sync_line}",
+        "<b>Event store</b>",
+        f"  {stats['live']} live / {stats['total']} total",
+        f"  Last sync: {sync_line}",
         f"  {detail}" if detail else None,
-        f"  错误：{err}" if err else None,
-        f"  同步时间：每天 {settings.sync_times}（导入未来 {settings.sync_horizon_days} 天）",
+        f"  Error: {err}" if err else None,
+        f"  Sync schedule: daily at {settings.sync_times} (next {settings.sync_horizon_days} days)",
         "",
-        "<b>播报</b>",
-        f"  目标群：<code>{settings.report_chat_id}</code>",
-        f"  时间：每天 {settings.daily_report_time}，播 {settings.report_scope_label}",
-        f"  下次播报：{_next_run(context, 'daily_report')}",
-        f"  今天是否已播：{'是' if storage.already_reported(settings.report_chat_id or 0, today) else '否'}",
+        "<b>Digest</b>",
+        f"  Target chat: <code>{settings.report_chat_id}</code>",
+        f"  Daily at {settings.daily_report_time}, covering {settings.report_scope_label}",
+        f"  Next run: {_next_run(context, 'daily_report')}",
+        f"  Sent today: {'yes' if storage.already_reported(settings.report_chat_id or 0, today) else 'no'}",
         "",
-        "<b>问答</b>",
-        f"  FAQ 条目：{len(kb.passages)}",
-        f"  关键词规则：{len(keyword_rules.rules)}",
-        f"  LLM：{'、'.join(p.name for p in llm_service.providers) or '未配置'}",
-        f"  近 24h 提问：{storage.ask_count_today(time.time())} 次",
+        "<b>Q&amp;A</b>",
+        f"  FAQ entries: {len(kb.passages)}",
+        f"  Keyword rules: {len(keyword_rules.rules)}",
+        f"  Custom commands: {len(custom_commands.commands)}"
+        + (f" ⚠️ {len(custom_commands.errors)} config error(s)" if custom_commands.errors else ""),
+        f"  LLM: {', '.join(p.name for p in llm_service.providers) or 'not configured'}",
+        f"  Questions in last 24h: {storage.ask_count_today(time.time())}",
     ]
+    if settings.muted_chat_ids:
+        lines += ["", f"<b>Muted chats</b>: <code>{sorted(settings.muted_chat_ids)}</code>"]
+
     await update.effective_message.reply_text(
         "\n".join(line for line in lines if line is not None), parse_mode=ParseMode.HTML
     )

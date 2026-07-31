@@ -1,44 +1,53 @@
-# 关键词主动触发规则
+# Keyword auto-reply rules
 #
-# match     命中的词。英文按单词边界匹配(visa 不会命中 visable),中文直接包含匹配。
-# cooldown  同一个群内该规则的冷却秒数。必填思路:群里 776 人,不设冷却必然刷屏。
-# reply     回复内容,支持 Telegram HTML: <b>粗体</b> <i>斜体</i> <a href="">链接</a> <code>代码</code>
+# match     Terms to match. ASCII terms match on word boundaries (so "visa" won't
+#           fire on "visable"); non-ASCII terms match as plain substrings.
+#           Keep BOTH English and Chinese/Thai terms — people ask in any language,
+#           but the bot always replies in English.
+# cooldown  Seconds before this rule can fire again in the same chat. Required:
+#           in a 776-member group, no cooldown means guaranteed spam.
+# reply     Telegram HTML: <b>bold</b> <i>italic</i> <a href="">link</a> <code>code</code>
 #
-# 改完在群里发 /reload 即可生效,不用重启。
-# 一条消息最多触发一条规则(取第一条命中的),不叠加。
+# Send /reload in the group after editing — no restart needed.
+# One message fires at most one rule (the first match), they don't stack.
+
+# ⚠️ visa / housing / wifi are commented out — their text is still a placeholder
+#    and must not go out to 776 people. Fill in the real answer, uncomment,
+#    then /reload.
 
 - id: events
-  match: ["有什么活动", "最近活动", "今天有啥", "what events", "any events"]
+  match: ["what events", "any events", "what's on", "whats on", "有什么活动", "最近活动", "今天有啥"]
   cooldown: 1800
   reply: |
-    📅 发 /events 就能看近期活动，
-    或者直接看 <a href="https://app.sola.day/event/4seas">Social Layer 上的 4Seas 日历</a>。
+    📅 Send /events to see what's coming up,
+    or check the <a href="https://app.sola.day/event/4seas">4Seas calendar on Social Layer</a>.
 
 - id: join
-  match: ["怎么加入", "如何加入", "how to join", "how do i join"]
+  match: ["how to join", "how do i join", "how can i join", "怎么加入", "如何加入"]
   cooldown: 3600
   reply: |
-    🙌 欢迎！社区活动都在 <a href="https://app.sola.day/event/4seas">Social Layer</a> 上，
-    直接挑一场感兴趣的报名来玩就行，没有门槛。
-    有具体问题可以 @管理员。
+    🙌 Welcome! All community events live on <a href="https://app.sola.day/event/4seas">Social Layer</a>.
+    Just pick one that looks interesting and show up — no gatekeeping.
+    For anything specific, @ an admin here.
 
-- id: visa
-  match: ["签证", "visa", "落地签", "签证延期", "visa run"]
-  cooldown: 3600
-  reply: |
-    🛂 泰国签证相关的问题，群里有不少人踩过坑，直接问一句通常很快有人答。
-    <i>(管理员：这条回复的内容还没填，编辑 data/keywords.yaml 的 visa 规则)</i>
+# - id: visa
+#   match: ["visa", "visa run", "visa extension", "签证", "落地签"]
+#   cooldown: 3600
+#   reply: |
+#     🛂 Thai visa questions — plenty of people here have been through it,
+#     just ask in the group and someone will usually answer quickly.
+#     <i>(Admin: real content not filled in yet — edit the visa rule in data/keywords.yaml)</i>
 
-- id: housing
-  match: ["住宿", "房子", "租房", "housing", "co-living", "coliving", "accommodation"]
-  cooldown: 3600
-  reply: |
-    🏠 住宿问题群里经常聊，可以直接问。
-    <i>(管理员：这条回复的内容还没填，编辑 data/keywords.yaml 的 housing 规则)</i>
+# - id: housing
+#   match: ["housing", "co-living", "coliving", "accommodation", "住宿", "租房"]
+#   cooldown: 3600
+#   reply: |
+#     🏠 Housing comes up often in the group — feel free to just ask.
+#     <i>(Admin: real content not filled in yet — edit the housing rule in data/keywords.yaml)</i>
 
-- id: wifi
-  match: ["wifi", "wi-fi", "网络密码", "无线密码"]
-  cooldown: 7200
-  reply: |
-    📶 场地 Wi-Fi 信息问一下现场的管理员就行。
-    <i>(管理员：这条回复的内容还没填)</i>
+# - id: wifi
+#   match: ["wifi", "wi-fi", "网络密码", "无线密码"]
+#   cooldown: 7200
+#   reply: |
+#     📶 Ask whoever's running the venue for the Wi-Fi details.
+#     <i>(Admin: real content not filled in yet)</i>

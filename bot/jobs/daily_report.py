@@ -48,21 +48,21 @@ async def send_daily_report(
     offset = settings.daily_report_offset_days if offset_days is None else offset_days
 
     if not force and storage.already_reported(chat_id, today):
-        log.info("chat %s 今天已播报过，跳过", chat_id)
-        return "今天已经播报过了（用 /report 可强制重发）"
+        log.info("chat %s already got today's digest, skipping", chat_id)
+        return "Already posted today's digest (use /report to force a resend)"
 
     try:
         events = await load_events(days, offset_days=offset)
     except Exception as exc:
         log.error("取活动失败：%s", exc, exc_info=True)
-        await _alert_admins(context, f"⚠️ 每日播报取数失败：{exc}")
-        return f"取数失败：{exc}"
+        await _alert_admins(context, f"⚠️ Daily digest failed to load events: {exc}")
+        return f"Failed to load events: {exc}"
 
     if not events and not settings.daily_report_when_empty:
-        log.info("目标日期没有活动且配置为静默跳过")
+        log.info("no events for the target day; configured to stay silent")
         if not force:
             storage.mark_reported(chat_id, today)
-        return "目标日期没有活动，按配置静默跳过"
+        return "No events for the target day — staying silent per config"
 
     last = storage.last_sync()
     text = render_daily_report(
@@ -71,6 +71,7 @@ async def send_daily_report(
         today=today,
         offset_days=offset,
         source=last["source"] if last else None,
+        style=settings.digest_style,
     )
     await context.bot.send_message(
         chat_id=chat_id,
@@ -82,7 +83,7 @@ async def send_daily_report(
     if not force:
         storage.mark_reported(chat_id, today)
     log.info("播报完成：chat=%s 活动数=%d", chat_id, len(events))
-    return f"已播报 {len(events)} 场活动"
+    return f"Posted {len(events)} event(s)"
 
 
 async def daily_report_job(context: ContextTypes.DEFAULT_TYPE) -> None:

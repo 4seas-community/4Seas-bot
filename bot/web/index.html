@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>4Seas Bot — Commands</title>
+<style>
+  :root {
+    --bg:#f7f7f5; --panel:#fff; --line:#e3e3df; --text:#1c1c1a; --dim:#6b6b66;
+    --accent:#2f6f4f; --accent-soft:#e7f1ea; --danger:#a8322a; --danger-soft:#fbeae8;
+    --warn:#8a6100; --warn-soft:#fdf3dd; --radius:10px;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{ --bg:#16171a; --panel:#1f2126; --line:#32353c; --text:#e8e8e4; --dim:#9a9a94;
+           --accent:#6bbf90; --accent-soft:#20302a; --danger:#e08b82; --danger-soft:#33211f;
+           --warn:#e0b45c; --warn-soft:#332a18; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:24px 20px 80px}
+  header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:4px}
+  h1{font-size:20px;margin:0;letter-spacing:-.01em}
+  .sub{color:var(--dim);font-size:13px}
+  .bar{display:flex;gap:8px;flex-wrap:wrap;margin:18px 0}
+  button{font:inherit;padding:7px 14px;border-radius:8px;border:1px solid var(--line);
+         background:var(--panel);color:var(--text);cursor:pointer}
+  button:hover{border-color:var(--dim)}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  button.danger{color:var(--danger);border-color:var(--danger)}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+        padding:14px 16px;margin-bottom:10px}
+  .row{display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap}
+  .grow{flex:1;min-width:220px}
+  .name{font-family:var(--mono);font-size:15px;font-weight:600}
+  .desc{color:var(--dim);font-size:13px;margin-top:2px}
+  .reply{font-family:var(--mono);font-size:12.5px;white-space:pre-wrap;word-break:break-word;
+         background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:9px 11px;margin-top:10px;
+         max-height:150px;overflow:auto}
+  .tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .tag{font-size:11px;padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--dim)}
+  .tag.on{background:var(--accent-soft);border-color:transparent;color:var(--accent);font-weight:600}
+  .tag.off{background:var(--warn-soft);border-color:transparent;color:var(--warn);font-weight:600}
+  .actions{display:flex;gap:6px;flex-wrap:wrap}
+  .msg{padding:10px 14px;border-radius:8px;margin-bottom:12px;font-size:13.5px;display:none}
+  .msg.show{display:block}
+  .msg.err{background:var(--danger-soft);color:var(--danger)}
+  .msg.ok{background:var(--accent-soft);color:var(--accent)}
+  .msg.warn{background:var(--warn-soft);color:var(--warn)}
+  dialog{border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);color:var(--text);
+         padding:0;width:min(620px,94vw)}
+  dialog::backdrop{background:rgba(0,0,0,.45)}
+  form{padding:20px}
+  label{display:block;font-size:12.5px;color:var(--dim);margin:14px 0 5px;font-weight:600;
+        text-transform:uppercase;letter-spacing:.04em}
+  label:first-of-type{margin-top:0}
+  input[type=text],textarea,select{width:100%;padding:8px 10px;border-radius:8px;
+       border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}
+  textarea{font-family:var(--mono);font-size:13px;min-height:130px;resize:vertical}
+  .hint{font-size:12px;color:var(--dim);margin-top:5px;font-weight:400;text-transform:none;letter-spacing:0}
+  .checks{display:flex;gap:18px;flex-wrap:wrap;margin-top:14px}
+  .check{display:flex;align-items:center;gap:7px;font-size:13.5px}
+  .check input{width:auto;margin:0}
+  .cols{display:flex;gap:14px;flex-wrap:wrap}
+  .cols>div{flex:1;min-width:150px}
+  .dlg-foot{display:flex;justify-content:space-between;gap:10px;margin-top:22px;
+            border-top:1px solid var(--line);padding-top:16px}
+  .status{font-size:12.5px;color:var(--dim);font-family:var(--mono);
+          background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+          padding:12px 14px;white-space:pre-wrap;margin-top:26px}
+  .empty{color:var(--dim);text-align:center;padding:44px 0;font-size:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>4Seas Bot</h1>
+    <span class="sub">command management</span>
+  </header>
+  <div class="sub">Changes take effect immediately — no restart, no <code>/reload</code> needed.</div>
+
+  <div class="bar">
+    <button class="primary" id="add">+ New command</button>
+    <button id="reloadAll">Reload FAQ &amp; keywords</button>
+    <button id="refresh">Refresh</button>
+  </div>
+
+  <div class="msg" id="msg"></div>
+  <div id="list"></div>
+  <div class="status" id="status">loading…</div>
+</div>
+
+<dialog id="dlg"><form id="form" method="dialog">
+  <h2 id="dlgTitle" style="margin:0 0 4px;font-size:17px">New command</h2>
+  <div class="sub" id="dlgSub"></div>
+
+  <label>Command</label>
+  <input type="text" id="f_command" autocomplete="off" spellcheck="false" placeholder="wifi">
+  <div class="hint">Lowercase letters, digits and underscore. Becomes <code>/wifi</code>.</div>
+
+  <label>Description</label>
+  <input type="text" id="f_description" autocomplete="off" placeholder="Venue Wi-Fi details">
+  <div class="hint">Shown in <code>/help</code> and Telegram's command menu.</div>
+
+  <label>Reply</label>
+  <textarea id="f_reply" spellcheck="false" placeholder="📶 &lt;b&gt;Wi-Fi&lt;/b&gt;&#10;Network: &lt;code&gt;4Seas-Guest&lt;/code&gt;"></textarea>
+  <div class="hint">HTML: <code>&lt;b&gt; &lt;i&gt; &lt;u&gt; &lt;s&gt; &lt;code&gt; &lt;pre&gt; &lt;a href=""&gt;</code>.
+    Literal <code>&lt; &gt; &amp;</code> must be escaped or Telegram rejects the message.</div>
+
+  <div class="cols">
+    <div>
+      <label>Scope</label>
+      <select id="f_scope">
+        <option value="all">Anywhere</option>
+        <option value="group">Groups only</option>
+        <option value="private">Private chat only</option>
+      </select>
+    </div>
+    <div>
+      <label>Parse mode</label>
+      <select id="f_parse_mode">
+        <option>HTML</option><option>Markdown</option>
+        <option>MarkdownV2</option><option value="none">Plain text</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="checks">
+    <label class="check"><input type="checkbox" id="f_enabled" checked> Enabled</label>
+    <label class="check"><input type="checkbox" id="f_admin_only"> Admins only</label>
+    <label class="check"><input type="checkbox" id="f_disable_preview" checked> No link preview</label>
+  </div>
+
+  <div class="msg err" id="dlgMsg"></div>
+
+  <div class="dlg-foot">
+    <button type="button" id="cancel">Cancel</button>
+    <button type="button" class="primary" id="save">Save</button>
+  </div>
+</form></dialog>
+
+<script>
+const token = new URLSearchParams(location.search).get('token') || sessionStorage.getItem('t') || '';
+if (token) sessionStorage.setItem('t', token);
+
+const $ = id => document.getElementById(id);
+let editing = null;
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: {'Content-Type': 'application/json', 'X-Admin-Token': token, ...(opts.headers || {})},
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || (res.status === 401
+    ? 'Unauthorised — open this page using the ?token=… link from the bot log.'
+    : `Request failed (${res.status})`));
+  return body;
+}
+
+function flash(text, kind = 'ok') {
+  const m = $('msg');
+  m.textContent = text;
+  m.className = `msg show ${kind}`;
+  if (kind === 'ok') setTimeout(() => m.className = 'msg', 4000);
+}
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function render(data) {
+  const list = $('list');
+  const problems = [...(data.file_errors || []), ...(data.config_errors || [])];
+  if (problems.length) flash(problems.join(' · '), 'warn');
+
+  if (!data.commands.length) {
+    list.innerHTML = '<div class="empty">No custom commands yet. Create one above.</div>';
+    return;
+  }
+
+  list.innerHTML = data.commands.map(c => `
+    <div class="card">
+      <div class="row">
+        <div class="grow">
+          <div class="name">/${esc(c.command)}</div>
+          ${c.description ? `<div class="desc">${esc(c.description)}</div>` : ''}
+          <div class="tags">
+            <span class="tag ${c.enabled ? 'on' : 'off'}">${c.enabled ? 'enabled' : 'disabled'}</span>
+            ${c.admin_only ? '<span class="tag">admins only</span>' : ''}
+            ${c.scope !== 'all' ? `<span class="tag">${esc(c.scope)} only</span>` : ''}
+            <span class="tag">${esc(c.source_file)}</span>
+            ${c.siblings ? `<span class="tag">shares file with ${c.siblings}</span>` : ''}
+          </div>
+        </div>
+        <div class="actions">
+          <button data-act="edit" data-n="${esc(c.command)}">Edit</button>
+          <button data-act="toggle" data-n="${esc(c.command)}">${c.enabled ? 'Disable' : 'Enable'}</button>
+          <button class="danger" data-act="del" data-n="${esc(c.command)}">Delete</button>
+        </div>
+      </div>
+      <div class="reply">${esc(c.reply)}</div>
+    </div>`).join('');
+
+  list.querySelectorAll('button[data-act]').forEach(b => {
+    b.onclick = () => act(b.dataset.act, b.dataset.n, data.commands);
+  });
+}
+
+async function act(kind, name, all) {
+  const cmd = all.find(c => c.command === name);
+  try {
+    if (kind === 'edit') return open(cmd);
+    if (kind === 'toggle') {
+      await api(`/api/commands/${name}/toggle`, {method:'POST', body: JSON.stringify({enabled: !cmd.enabled})});
+      flash(`/${name} ${cmd.enabled ? 'disabled' : 'enabled'}`);
+    }
+    if (kind === 'del') {
+      if (!confirm(`Delete /${name}? This removes it from the config file.`)) return;
+      await api(`/api/commands/${name}`, {method:'DELETE'});
+      flash(`/${name} deleted`);
+    }
+    await load();
+  } catch (e) { flash(e.message, 'err'); }
+}
+
+function open(cmd) {
+  editing = cmd ? cmd.command : null;
+  $('dlgTitle').textContent = cmd ? `Edit /${cmd.command}` : 'New command';
+  $('dlgSub').textContent = cmd && cmd.siblings
+    ? `Saving rewrites ${cmd.source_file}, which holds ${cmd.siblings} other command(s). Comments in that file will be lost.`
+    : '';
+  $('f_command').value = cmd?.command || '';
+  $('f_description').value = cmd?.description || '';
+  $('f_reply').value = cmd?.reply || '';
+  $('f_scope').value = cmd?.scope || 'all';
+  $('f_parse_mode').value = cmd?.parse_mode || 'HTML';
+  $('f_enabled').checked = cmd ? cmd.enabled : true;
+  $('f_admin_only').checked = cmd?.admin_only || false;
+  $('f_disable_preview').checked = cmd ? cmd.disable_preview : true;
+  $('dlgMsg').className = 'msg err';
+  $('dlg').showModal();
+  $('f_command').focus();
+}
+
+$('save').onclick = async () => {
+  const payload = {
+    command: $('f_command').value.trim(),
+    description: $('f_description').value.trim(),
+    reply: $('f_reply').value,
+    scope: $('f_scope').value,
+    parse_mode: $('f_parse_mode').value,
+    enabled: $('f_enabled').checked,
+    admin_only: $('f_admin_only').checked,
+    disable_preview: $('f_disable_preview').checked,
+  };
+  try {
+    if (editing) await api(`/api/commands/${editing}`, {method:'PUT', body: JSON.stringify(payload)});
+    else await api('/api/commands', {method:'POST', body: JSON.stringify(payload)});
+    $('dlg').close();
+    flash(`/${payload.command} saved and live`);
+    await load();
+  } catch (e) {
+    const m = $('dlgMsg'); m.textContent = e.message; m.className = 'msg err show';
+  }
+};
+
+$('cancel').onclick = () => $('dlg').close();
+$('add').onclick = () => open(null);
+$('refresh').onclick = () => load();
+$('reloadAll').onclick = async () => {
+  try { await api('/api/reload', {method:'POST'}); flash('FAQ, keyword rules and commands reloaded'); await load(); }
+  catch (e) { flash(e.message, 'err'); }
+};
+
+async function load() {
+  try {
+    render(await api('/api/commands'));
+    const s = await api('/api/status');
+    const ls = s.last_sync;
+    $('status').textContent = [
+      `events      ${s.events.live} live / ${s.events.total} total`,
+      `last sync   ${ls ? `${ls.ok ? 'ok' : 'FAILED'}  ${ls.at.slice(0,16).replace('T',' ')} UTC  ` +
+        `fetched ${ls.fetched} · new ${ls.inserted} · updated ${ls.updated} · unchanged ${ls.unchanged}` : 'never'}`,
+      `sync at     ${s.sync_times} daily`,
+      `digest      ${s.report.time} daily → chat ${s.report.chat_id} (${s.report.scope})`,
+      `faq         ${s.faq_entries} entries`,
+      `keywords    ${s.keyword_rules} rules`,
+      `commands    ${s.custom_commands} live`,
+      s.muted_chats.length ? `muted       ${s.muted_chats.join(', ')}` : null,
+    ].filter(Boolean).join('\n');
+  } catch (e) { flash(e.message, 'err'); }
+}
+
+load();
+</script>
+</body>
+</html>

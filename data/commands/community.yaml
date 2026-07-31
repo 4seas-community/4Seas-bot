@@ -1,0 +1,16 @@
+# Safe, always-true commands. Edit freely, then /reload.
+
+- command: calendar
+  description: The 4Seas events calendar
+  reply: |
+    📅 <b>4Seas events</b>
+    <a href="https://app.sola.day/event/4seas">app.sola.day/event/4seas</a>
+
+    Send /events for what's coming up this week.
+
+- command: links
+  description: Community links
+  reply: |
+    🔗 <b>4Seas links</b>
+    • Events — <a href="https://app.sola.day/event/4seas">Social Layer</a>
+    • This bot — <a href="https://github.com/4seas-community/4Seas-bot">GitHub</a>

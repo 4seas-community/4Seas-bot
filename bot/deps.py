@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .config import settings
+from .services.custom_commands import CustomCommandRegistry
 from .services.events import event_service
 from .services.kb import KnowledgeBase
 from .services.keywords import KeywordRules
@@ -12,5 +13,9 @@ from .storage import Storage
 storage = Storage(settings.db_path)
 kb = KnowledgeBase()
 keyword_rules = KeywordRules()
+custom_commands = CustomCommandRegistry(settings.commands_dir)
 
-__all__ = ["storage", "kb", "keyword_rules", "event_service", "llm_service", "settings"]
+__all__ = [
+    "storage", "kb", "keyword_rules", "custom_commands",
+    "event_service", "llm_service", "settings",
+]

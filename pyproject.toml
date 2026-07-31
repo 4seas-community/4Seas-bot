@@ -14,6 +14,7 @@ dependencies = [
     "rank-bm25>=0.2.2",
     "openai>=1.60",
     "icalendar>=6.1",
+    "aiohttp>=3.11",
 ]
 
 [project.optional-dependencies]
@@ -28,6 +29,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["bot"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"bot/web/index.html" = "bot/web/index.html"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

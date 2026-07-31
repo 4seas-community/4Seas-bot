@@ -27,6 +27,15 @@ class Settings(BaseSettings):
     telegram_bot_token: str
     telegram_admin_ids: str = ""
     telegram_allowed_chats: str = ""
+    # 已加入但暂时不希望它开口的群：收消息、不回任何东西。
+    # 测试期间把正式群放进来，比从白名单里删掉安全（删掉会触发退群逻辑）。
+    telegram_muted_chats: str = ""
+    # 非白名单群是否直接退群。默认 false —— 退群不可逆，白名单打错一个字符
+    # 就会丢掉正式群的管理员身份。
+    leave_unknown_chats: bool = False
+    # 启动时丢弃积压的历史消息。生产环境建议 true（重启后不会把停机期间的
+    # 消息一次性重放出去）；调试时设 false 才能接住刚发的测试消息。
+    drop_pending_updates: bool = True
     daily_report_chat_id: int | None = None
 
     # 每日播报
@@ -38,8 +47,15 @@ class Settings(BaseSettings):
     daily_report_when_empty: bool = True
     tz: str = "Asia/Bangkok"
 
+    # 播报排版:compact = 一行一场(默认);detailed = 完整卡片(地址/主办/人数/标签)
+    digest_style: str = "compact"
+
     # /events 手动查询默认看未来几天（从今天算起）
     events_command_days: int = Field(default=7, ge=0, le=30)
+
+    # 问答用什么语言回复。静态文案（/help、欢迎语、播报）已经全部是英文，
+    # 这个只管 LLM 生成的部分 —— 不设死的话模型会跟着提问者的语言走。
+    reply_language: str = "English"
 
     # 数据源与同步
     sola_group: str = "4seas"
@@ -63,6 +79,19 @@ class Settings(BaseSettings):
     ask_rate_per_hour: int = 10
     keyword_default_cooldown: int = 3600
 
+    # 自定义命令的配置目录。放 *.yaml,群里发 /reload 即可生效,不用重启。
+    commands_dir: str = "data/commands"
+
+    # 管理页。默认只绑 127.0.0.1 —— 这个页面能改 bot 在 776 人群里说什么，
+    # 不该直接暴露到公网。远程访问用 SSH 隧道:
+    #   ssh -N -L 8080:127.0.0.1:8080 user@host
+    web_enabled: bool = True
+    web_host: str = "127.0.0.1"
+    web_port: int = 8477
+    # 留空则每次启动随机生成并打到日志里。填了才有稳定链接。
+    # 绑非回环地址时必须显式填，否则拒绝启动。
+    web_token: str = ""
+
     db_path: str = "data/bot.sqlite3"
     log_level: str = "INFO"
 
@@ -73,6 +102,10 @@ class Settings(BaseSettings):
     @cached_property
     def allowed_chats(self) -> list[int]:
         return _parse_ids(self.telegram_allowed_chats)
+
+    @cached_property
+    def muted_chat_ids(self) -> frozenset[int]:
+        return frozenset(_parse_ids(self.telegram_muted_chats))
 
     @cached_property
     def zone(self) -> ZoneInfo:

@@ -15,21 +15,40 @@ from rank_bm25 import BM25Okapi
 
 log = logging.getLogger(__name__)
 
-# 中文按字切、英文按词切 —— 不引入分词器依赖，对 FAQ 这个量级够用
-_TOKEN_RE = re.compile(r"[a-zA-Z0-9]+|[一-鿿]")
+# 拉丁字母/数字按词切；中日韩和泰文按字切。
+# 中泰都没有词边界，逐字建 unigram 对 FAQ 这个量级的 BM25 够用，
+# 也省掉 jieba / pythainlp 这类分词依赖。
+# 漏掉泰文范围会让泰文提问切出 0 个 token，检索直接全空 —— 实测踩过。
+_TOKEN_RE = re.compile(
+    r"[a-zA-Z0-9]+"          # latin words / numbers
+    r"|[一-鿿]"      # CJK
+    r"|[฀-๿]"      # Thai
+)
 
 
 def tokenize(text: str) -> list[str]:
     return _TOKEN_RE.findall(text.lower())
 
 
+# 隐藏检索别名：`<!-- also: 怎么加入 如何加入 เข้าร่วม -->`
+# 参与 BM25 索引，但不进喂给模型的正文。
+_ALIAS_RE = re.compile(r"<!--\s*also:\s*(.*?)\s*-->", re.S | re.I)
+
+
 @dataclass(slots=True)
 class Passage:
     title: str
     body: str
+    aliases: str = ""
 
     @property
     def text(self) -> str:
+        """BM25 索引用的全文，含别名。"""
+        return f"{self.title}\n{self.body}\n{self.aliases}"
+
+    @property
+    def prompt_text(self) -> str:
+        """喂给模型的正文，不含别名 —— 别名是检索用的噪音词，会干扰生成。"""
         return f"{self.title}\n{self.body}"
 
 
@@ -50,15 +69,22 @@ class KnowledgeBase:
         raw = self.path.read_text(encoding="utf-8")
         passages: list[Passage] = []
         title, buf = None, []
+
+        def flush() -> None:
+            if title is None:
+                return
+            chunk = "\n".join(buf)
+            aliases = " ".join(_ALIAS_RE.findall(chunk))
+            body = _ALIAS_RE.sub("", chunk).strip()
+            passages.append(Passage(title, body, aliases))
+
         for line in raw.splitlines():
             if line.startswith("## "):
-                if title:
-                    passages.append(Passage(title, "\n".join(buf).strip()))
+                flush()
                 title, buf = line[3:].strip(), []
-            elif title:
+            elif title is not None:
                 buf.append(line)
-        if title:
-            passages.append(Passage(title, "\n".join(buf).strip()))
+        flush()
 
         self.passages = [p for p in passages if p.body or p.title]
         self._bm25 = (

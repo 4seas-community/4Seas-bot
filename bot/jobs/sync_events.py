@@ -27,7 +27,7 @@ _sync_lock = asyncio.Lock()
 async def sync_events(horizon_days: int | None = None) -> tuple[bool, str]:
     """执行一次导入。返回 (是否成功, 给人看的结果描述)。"""
     if _sync_lock.locked():
-        return False, "已有一次同步正在进行，本次跳过"
+        return False, "A sync is already running — skipping this one"
 
     async with _sync_lock:
         days = settings.sync_horizon_days if horizon_days is None else horizon_days
@@ -36,7 +36,7 @@ async def sync_events(horizon_days: int | None = None) -> tuple[bool, str]:
         except Exception as exc:
             log.error("活动同步失败：%s", exc, exc_info=True)
             storage.log_sync("unknown", SyncResult(), ok=False, error=str(exc))
-            return False, f"拉取失败：{exc}"
+            return False, f"Fetch failed: {exc}"
 
         result = storage.upsert_events(
             outcome.events, source=outcome.source, window=outcome.window
@@ -53,6 +53,6 @@ async def sync_events_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     for admin_id in settings.admin_ids:
         try:
-            await context.bot.send_message(admin_id, f"⚠️ 活动同步失败：{detail}")
+            await context.bot.send_message(admin_id, f"⚠️ Event sync failed: {detail}")
         except Exception as exc:
             log.warning("给管理员 %s 发同步告警失败：%s", admin_id, exc)
