@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import html
+import re
 
 from .models import Event
 
@@ -18,6 +19,30 @@ SOLA_URL = "https://app.sola.day/event/4seas"
 
 def esc(text: str | None) -> str:
     return html.escape(text or "", quote=False)
+
+
+# Telegram auto-links bare URLs and @handles in plain text, so HTML escaping is
+# not enough — an injected link still renders as a tappable link for 776 people.
+# The digest carries exactly one link, appended by the renderer, so any link in
+# generated or organiser-supplied prose is either injected or redundant. Drop it.
+_LINKISH = re.compile(
+    r"""(?xi)
+      \b(?:https?|ftp)://\S+          # scheme URLs
+    | \bwww\.\S+                     # www.…
+    | \b(?:t\.me|telegram\.me)/\S+  # telegram deep links
+    | (?<![\w@])@[A-Za-z0-9_]{4,}      # @handles (auto-linked by Telegram)
+    | \b[\w.-]+\.(?:com|net|org|io|xyz|app|link|me|co|day|finance)\b(?:/\S*)?
+    """
+)
+
+
+def strip_links(text: str) -> str:
+    """Remove anything Telegram would turn into a tappable link."""
+    cleaned = _LINKISH.sub("", text)
+    # Tidy the punctuation left behind by the removal.
+    cleaned = re.sub(r"\s+([,.;:!?])", r"\1", cleaned)
+    cleaned = re.sub(r"\(\s*\)|\[\s*\]", "", cleaned)
+    return " ".join(cleaned.split())
 
 
 def fmt_date(d: dt.date) -> str:
@@ -47,16 +72,18 @@ def day_label(day: dt.date, today: dt.date) -> str:
     return fmt_date(day)
 
 
-TITLE_MAX = 58
+TITLE_MAX = 58        # compact 单行用
+TITLE_MAX_EDITORIAL = 120  # editorial 独占一行，砍标题只会丢信息
 
 
-def _short_title(title: str) -> str:
+def _short_title(title: str, limit: int = TITLE_MAX) -> str:
     """Sola titles run long ('Language Corner  Sa-Wat-Dee Thai Learn Basic Thai
-    Together'). One long title wrapping to three lines ruins a compact list."""
+    Together'). One long title wrapping to three lines ruins a compact list —
+    but in the editorial layout the title owns its line, so barely trim it."""
     clean = " ".join(title.split())
-    if len(clean) <= TITLE_MAX:
+    if len(clean) <= limit:
         return clean
-    return clean[: TITLE_MAX - 1].rstrip() + "…"
+    return clean[: limit - 1].rstrip() + "…"
 
 
 def render_event_line(ev: Event) -> str:
@@ -111,6 +138,99 @@ def render_event(ev: Event, index: int | None = None) -> str:
         lines.append(f'🔗 <a href="{esc(ev.url)}">Details / RSVP</a>')
 
     return "\n".join(lines)
+
+
+def fmt_span(ev: Event, target_date: dt.date | None = None) -> str:
+    """Time span as shown under a given day's heading.
+
+    `target_date` matters for multi-day events. A residency week that began on
+    Jul 28 and is still running tomorrow used to render as `09:00–Aug 3 18:00`
+    under tomorrow's heading — and 09:00 is Jul 28's start time, so readers take
+    it as "starts 9am tomorrow". Anything that began earlier is labelled as
+    already running instead of quoting a start time from another day.
+    """
+    start = ev.local_start
+    end = ev.local_end
+
+    if target_date is not None and start.date() < target_date:
+        if end is None:
+            return "Ongoing"
+        if end.date() > target_date:
+            return f"Ongoing · until {end:%b %-d}"
+        return f"Ongoing · until {end:%H:%M}"
+
+    if ev.is_all_day:
+        return "All day"
+    if end is None:
+        return f"{start:%H:%M}"
+    if end.date() != start.date():
+        return f"{start:%H:%M} → {end:%b %-d %H:%M}"
+    return f"{start:%H:%M}–{end:%H:%M}"
+
+
+def render_editorial(
+    events: list[Event],
+    *,
+    target_date: dt.date,
+    today: dt.date | None = None,
+    opening: str = "",
+    lines: dict[str, str] | None = None,
+    closing: str = "",
+) -> str:
+    """The community-post layout.
+
+        {opening}
+
+        11:00–13:00｜Language & Culture Exchange
+        📍 Event Space, 1st Floor, 4Seas Nimman
+        {one-line recommendation}
+
+        ...
+
+        {closing}
+
+        Details:
+        https://app.sola.day/event/4seas
+
+    One link at the end, not one per event — a link on every line reads as noise.
+    Venue and recommendation lines are omitted entirely when the data isn't there,
+    rather than printed empty or padded with filler.
+    """
+    lines = lines or {}
+    date_line = f"<b>{target_date.strftime('%A, %-d %B')}</b>"
+
+    if not events:
+        # Explicitly "none found" — never quietly borrow another day's events.
+        # The label follows target_date; hardcoding "tomorrow" makes the message
+        # lie whenever DAILY_REPORT_OFFSET_DAYS is anything but 1.
+        label = day_label(target_date, today) if today else fmt_date(target_date)
+        # "today"/"tomorrow" read as adverbs; a date needs "on" and keeps its caps.
+        when = label.lower() if label in ("Today", "Tomorrow") else f"on {label}"
+        body = opening or f"No 4Seas events are listed {when}."
+        return (
+            f"{date_line}\n\n{esc(body)}\n\n"
+            f'Details:\n<a href="{SOLA_URL}">{SOLA_URL}</a>'
+        )
+
+    parts: list[str] = [date_line]
+    if opening:
+        parts.append(esc(opening))
+
+    for ev in events:
+        block = [f"{fmt_span(ev, target_date)}｜<b>{esc(_short_title(ev.title, TITLE_MAX_EDITORIAL))}</b>"]
+        venue = ev.venue_name or ev.place_title
+        if venue:
+            block.append(f"📍 {esc(venue)}")
+        rec = (lines.get(ev.id) or "").strip()
+        if rec:
+            block.append(esc(rec))
+        parts.append("\n".join(block))
+
+    if closing:
+        parts.append(esc(closing))
+    parts.append(f'Details:\n<a href="{SOLA_URL}">{SOLA_URL}</a>')
+
+    return _truncate("\n\n".join(parts))
 
 
 def render_daily_report(

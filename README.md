@@ -82,6 +82,16 @@ TZ=Asia/Bangkok
 改这两个值不需要重新导入 —— 库里存的是未来 60 天，播报只是换个查询窗口。
 完整配置项见 [`.env.example`](.env.example)。
 
+### 跑测试
+
+```bash
+uv pip install -e ".[dev]"
+.venv/bin/python -m pytest -q
+```
+
+不需要 `.env`、不需要任何密钥 —— `tests/conftest.py` 会填占位配置，
+并显式关掉 `.env`，保证本机和 CI 跑的是同一套配置。
+
 ### 怎么拿到群的 chat_id
 
 把 bot 拉进群、在群里发一条消息，然后：

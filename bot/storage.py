@@ -13,12 +13,15 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import logging
 import sqlite3
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 
 from .models import Event
+
+log = logging.getLogger(__name__)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -30,6 +33,8 @@ CREATE TABLE IF NOT EXISTS events (
     tz               TEXT    NOT NULL,
     place_title      TEXT,
     place_address    TEXT,
+    venue_name       TEXT,
+    content          TEXT,
     host             TEXT,
     participants     INTEGER,
     max_participants INTEGER,
@@ -61,6 +66,21 @@ CREATE TABLE IF NOT EXISTS sync_log (
     error      TEXT
 );
 
+-- 文案历史。用来做「不能和前几天撞句型」和「邀请语 4-6 天才出现一次」的约束，
+-- 没有它 LLM 每天都会滑回同一个模板。
+CREATE TABLE IF NOT EXISTS digest_log (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_date    TEXT NOT NULL,
+    written_at     TEXT NOT NULL,
+    opening_angle  TEXT NOT NULL,
+    closing_angle  TEXT NOT NULL,
+    invite_used    INTEGER NOT NULL DEFAULT 0,
+    opening_text   TEXT NOT NULL DEFAULT '',
+    closing_text   TEXT NOT NULL DEFAULT '',
+    event_count    INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_digest_date ON digest_log (target_date);
+
 CREATE TABLE IF NOT EXISTS report_log (
     chat_id     INTEGER NOT NULL,
     report_date TEXT    NOT NULL,
@@ -80,10 +100,22 @@ CREATE TABLE IF NOT EXISTS ask_usage (
 CREATE INDEX IF NOT EXISTS idx_ask_usage ON ask_usage (user_id, asked_at);
 """
 
+# 后加的列。SQLite 只支持 ADD COLUMN，逐个补即可，不需要重建表。
+_MIGRATIONS = (
+    ("venue_name", "ALTER TABLE events ADD COLUMN venue_name TEXT"),
+    ("content", "ALTER TABLE events ADD COLUMN content TEXT"),
+)
+
+# 详情接口才有的字段。列表接口拿不到，补齐失败时是 None ——
+# 这时必须沿用库里已有的值，否则一次详情接口抖动就会把已经补好的 venue/content
+# 擦成空，下次成功再填回来，数据和 updated_at 反复翻转，播报还会掉描述。
+_ENRICHED_FIELDS = ("venue_name", "content")
+
 # 参与 content_hash 的字段。participants（报名人数）故意排除 ——
 # 它每天都在变，算进去会让每次同步都判定为"内容变了"，updated_at 就失去意义了。
 _HASH_FIELDS = (
     "title", "start_ts", "end_ts", "tz", "place_title", "place_address",
+    "venue_name", "content",
     "host", "max_participants", "tags", "meeting_url", "notes",
     "require_approval", "url",
 )
@@ -114,6 +146,8 @@ def _event_to_row(ev: Event, now_iso: str) -> dict:
         "tz": ev.tz,
         "place_title": ev.place_title,
         "place_address": ev.place_address,
+        "venue_name": ev.venue_name,
+        "content": ev.content,
         "host": ev.host,
         "participants": ev.participants,
         "max_participants": ev.max_participants,
@@ -123,12 +157,16 @@ def _event_to_row(ev: Event, now_iso: str) -> dict:
         "require_approval": int(ev.require_approval),
         "url": ev.url,
     }
-    payload = json.dumps([row[f] for f in _HASH_FIELDS], ensure_ascii=False)
-    row["content_hash"] = hashlib.sha256(payload.encode("utf-8")).hexdigest()
     row["first_seen_at"] = now_iso
     row["updated_at"] = now_iso
     row["last_seen_at"] = now_iso
     return row
+
+
+def _hash_row(row: dict) -> str:
+    """Hash is computed after any backfill, never before — see upsert_events."""
+    payload = json.dumps([row[f] for f in _HASH_FIELDS], ensure_ascii=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _row_to_event(row: sqlite3.Row) -> Event:
@@ -140,6 +178,8 @@ def _row_to_event(row: sqlite3.Row) -> Event:
         tz=row["tz"],
         place_title=row["place_title"],
         place_address=row["place_address"],
+        venue_name=row["venue_name"],
+        content=row["content"],
         host=row["host"],
         participants=row["participants"],
         max_participants=row["max_participants"],
@@ -162,7 +202,29 @@ class Storage:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(SCHEMA)
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        """补上后加的列。老库直接 ALTER，不重建、不丢数据。
+
+        两个列不值得上 PRAGMA user_version 那一套版本化迁移框架，但"检查完到
+        执行之间被别人抢先"这个窗口是真实存在的（systemd 重启时新旧进程短暂
+        重叠）。ALTER 失败一次就会让 Storage 在 import 期抛异常、bot 起不来，
+        所以这里把 duplicate column 当成成功。
+        """
+        have = {r["name"] for r in self._conn.execute("PRAGMA table_info(events)")}
+        for column, ddl in _MIGRATIONS:
+            if column in have:
+                continue
+            try:
+                self._conn.execute(ddl)
+                log.info("migrated events table: added column %s", column)
+            except sqlite3.OperationalError as exc:
+                if "duplicate column" in str(exc).lower():
+                    log.info("column %s already added by another process", column)
+                    continue
+                raise
 
     # ── 活动同步（幂等） ──────────────────────────────────────────────
     def upsert_events(
@@ -183,16 +245,32 @@ class Storage:
 
         with self._lock:
             existing = {
-                r["event_id"]: r["content_hash"]
+                r["event_id"]: r
                 for r in self._conn.execute(
-                    "SELECT event_id, content_hash FROM events WHERE source = ?", (source,)
+                    "SELECT event_id, content_hash, venue_name, content "
+                    "FROM events WHERE source = ?", (source,)
                 )
             }
 
             for ev in events:
+                prev = existing.get(ev.id)
                 row = _event_to_row(ev, now_iso)
                 row["source"] = source
-                prev_hash = existing.get(row["event_id"])
+
+                if prev is not None:
+                    # 补在 row 上，不碰传入的 Event —— 就地 mutate 调用方的对象
+                    # 是个隐式契约，今天只有 sync_events 调且调完就丢，但下一个
+                    # 调用方拿到被改过的对象会很意外。
+                    #
+                    # 必须补在算 hash 之前。放到 SQL 里 COALESCE 也能保住数据，
+                    # 但 hash 会按 None 算，和实际存的行对不上，下次同步依然误判
+                    # "内容变了"。
+                    for field_name in _ENRICHED_FIELDS:
+                        if row[field_name] is None and prev[field_name] is not None:
+                            row[field_name] = prev[field_name]
+
+                row["content_hash"] = _hash_row(row)
+                prev_hash = prev["content_hash"] if prev is not None else None
                 if prev_hash is None:
                     result.inserted += 1
                 elif prev_hash != row["content_hash"]:
@@ -204,12 +282,14 @@ class Storage:
                     """
                     INSERT INTO events (
                         source, event_id, title, start_ts, end_ts, tz,
-                        place_title, place_address, host, participants, max_participants,
+                        place_title, place_address, venue_name, content,
+                        host, participants, max_participants,
                         tags, meeting_url, notes, require_approval, url,
                         content_hash, first_seen_at, updated_at, last_seen_at, deleted_at
                     ) VALUES (
                         :source, :event_id, :title, :start_ts, :end_ts, :tz,
-                        :place_title, :place_address, :host, :participants, :max_participants,
+                        :place_title, :place_address, :venue_name, :content,
+                        :host, :participants, :max_participants,
                         :tags, :meeting_url, :notes, :require_approval, :url,
                         :content_hash, :first_seen_at, :updated_at, :last_seen_at, NULL
                     )
@@ -220,6 +300,8 @@ class Storage:
                         tz               = excluded.tz,
                         place_title      = excluded.place_title,
                         place_address    = excluded.place_address,
+                        venue_name       = excluded.venue_name,
+                        content          = excluded.content,
                         host             = excluded.host,
                         participants     = excluded.participants,
                         max_participants = excluded.max_participants,
@@ -253,6 +335,46 @@ class Storage:
 
             self._conn.commit()
         return result
+
+    # ── 文案历史 ──────────────────────────────────────────────────────
+    def record_digest(
+        self, target_date: dt.date, *, opening_angle: str, closing_angle: str,
+        invite_used: bool, opening_text: str, closing_text: str, event_count: int,
+    ) -> None:
+        """按 target_date 幂等 —— 管理员连按几次 /report 预览时，不该每按一次
+        就烧掉一个「这个角度用过了」的名额，更不该把邀请语的 4-6 天计数打乱。"""
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM digest_log WHERE target_date = ?", (target_date.isoformat(),)
+            )
+            self._conn.execute(
+                "INSERT INTO digest_log (target_date, written_at, opening_angle, closing_angle, "
+                "invite_used, opening_text, closing_text, event_count) VALUES (?,?,?,?,?,?,?,?)",
+                (target_date.isoformat(), dt.datetime.now(dt.UTC).isoformat(),
+                 opening_angle, closing_angle, int(invite_used),
+                 opening_text[:400], closing_text[:400], event_count),
+            )
+            self._conn.commit()
+
+    def recent_digests(self, limit: int = 5) -> list[sqlite3.Row]:
+        with self._lock:
+            return list(self._conn.execute(
+                "SELECT * FROM digest_log ORDER BY id DESC LIMIT ?", (limit,)
+            ))
+
+    def days_since_invite(self, today: dt.date) -> int | None:
+        """距上次用「也欢迎你自己发起活动」那句过了几天。None = 从没用过。"""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT target_date FROM digest_log WHERE invite_used = 1 "
+                "ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            return (today - dt.date.fromisoformat(row["target_date"])).days
+        except ValueError:
+            return None
 
     def log_sync(self, source: str, result: SyncResult, ok: bool, error: str | None = None) -> None:
         with self._lock:

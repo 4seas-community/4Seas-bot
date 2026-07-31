@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 from functools import cached_property
 from zoneinfo import ZoneInfo
 
@@ -19,8 +20,12 @@ def _parse_ids(raw: str) -> list[int]:
 
 
 class Settings(BaseSettings):
+    # BOT_SETTINGS_ENV_FILE 让测试把 .env 关掉（设为空串）。不这样的话，本机有
+    # .env、CI 没有，同一套测试在两边跑的是不同配置。
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        env_file=os.environ.get("BOT_SETTINGS_ENV_FILE", ".env") or None,
+        env_file_encoding="utf-8",
+        extra="ignore",
     )
 
     # Telegram
@@ -48,7 +53,7 @@ class Settings(BaseSettings):
     tz: str = "Asia/Bangkok"
 
     # 播报排版:compact = 一行一场(默认);detailed = 完整卡片(地址/主办/人数/标签)
-    digest_style: str = "compact"
+    digest_style: str = "editorial"
 
     # /events 手动查询默认看未来几天（从今天算起）
     events_command_days: int = Field(default=7, ge=0, le=30)
@@ -65,6 +70,10 @@ class Settings(BaseSettings):
     # 也能及时进库。
     sync_times: str = "08:30,18:30"
     sync_horizon_days: int = Field(default=60, ge=1, le=365)
+    # venue 和 content 只有详情接口有,列表接口没有。补齐要一场一个请求,
+    # 所以只补近期的 —— 播报和 /events 用不到 60 天以后那些。
+    detail_enrich_days: int = Field(default=10, ge=0, le=60)
+    detail_concurrency: int = Field(default=6, ge=1, le=20)
     sync_on_startup: bool = True
 
     # LLM
