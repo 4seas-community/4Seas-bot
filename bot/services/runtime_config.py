@@ -176,7 +176,25 @@ def load() -> dict[str, Any]:
         # a working configuration.
         log.error("ignoring unreadable %s: %s", PATH, exc)
         return {}
-    return {k: v for k, v in data.items() if k in BY_KEY} if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        log.error("%s is not an object — ignoring", PATH)
+        return {}
+
+    # Re-validate on the way in. The web form validates before writing, but this
+    # file is hand-editable, and an out-of-range or malformed value would sail
+    # straight past the pydantic Field constraints (assignment isn't validated)
+    # and crash the bot at import time — with no bot, there is nothing to report
+    # the error with. Drop the bad key, keep the rest, say so in the log.
+    clean: dict[str, Any] = {}
+    for key, value in data.items():
+        field = BY_KEY.get(key)
+        if field is None:
+            continue
+        try:
+            clean[key] = coerce(field, value)
+        except ConfigError as exc:
+            log.error("ignoring %s in %s: %s", key, PATH, exc)
+    return clean
 
 
 def save(overrides: dict[str, Any]) -> None:

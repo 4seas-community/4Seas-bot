@@ -158,3 +158,31 @@ def test_every_field_has_help_text():
     for f in rc.FIELDS:
         assert f.help and len(f.help) > 20, f"{f.key} needs a real explanation"
         assert f.label and f.group
+
+
+def test_hand_edited_out_of_range_value_is_dropped_not_fatal(tmp_path, monkeypatch):
+    """The form validates before writing, but this file is hand-editable. An
+    out-of-range value sails past the pydantic Field constraints (assignment is
+    not validated) and crashes the bot at import — and with no bot running there
+    is nothing left to report the error with."""
+    path = tmp_path / "rc.json"
+    path.write_text(json.dumps({
+        "daily_report_offset_days": 999,      # Field allows 0-7
+        "daily_report_time": "garbage",       # would raise inside report_time
+        "digest_style": "compact",            # valid, must survive
+    }))
+    monkeypatch.setattr(rc, "PATH", path)
+
+    loaded = rc.load()
+    assert loaded == {"digest_style": "compact"}
+
+
+def test_hand_edited_file_cannot_break_startup(tmp_path, monkeypatch):
+    from bot.config import Settings
+    path = tmp_path / "rc.json"
+    path.write_text(json.dumps({"daily_report_time": "not a time"}))
+    monkeypatch.setattr(rc, "PATH", path)
+
+    s = Settings(telegram_bot_token="x", daily_report_time="19:00")
+    s.apply_overrides(rc.load())
+    assert s.report_time.hour == 19  # untouched, still usable
