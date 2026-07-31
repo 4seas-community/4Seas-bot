@@ -346,3 +346,56 @@ async def test_cold_store_recovers_when_sync_succeeds(monkeypatch):
     monkeypatch.setattr(dr, "sync_events", good_sync)
 
     assert await dr.load_events(0, offset_days=1) == found
+
+
+# ── Waiting for an in-flight sync must be bounded ─────────────────────
+
+
+async def test_sync_lock_wait_is_bounded(monkeypatch):
+    """Waiting forever is the mirror image of the Critical bug: the holder can wedge
+    on a path with no timeout (SQLite locked by another process), and the waiter then
+    hangs silently — no digest, no failure, no alert."""
+    import asyncio
+    from bot.jobs import sync_events as se
+
+    monkeypatch.setattr(se, "LOCK_WAIT_TIMEOUT", 0.05)
+
+    await se._sync_lock.acquire()
+    try:
+        ok, detail = await se.sync_events()
+    finally:
+        se._sync_lock.release()
+
+    assert ok is False
+    assert "Timed out" in detail
+
+
+async def test_sync_releases_the_lock_on_failure(monkeypatch):
+    """A leaked lock would make every later sync wait out the full timeout and fail."""
+    from bot.jobs import sync_events as se
+
+    async def boom(*a, **kw):
+        raise RuntimeError("upstream down")
+
+    monkeypatch.setattr(se.event_service, "fetch_upstream", boom)
+    monkeypatch.setattr(se.storage, "log_sync", lambda *a, **kw: None)
+
+    ok, _ = await se.sync_events()
+    assert ok is False
+    assert not se._sync_lock.locked(), "lock leaked after a failed sync"
+
+
+async def test_sync_releases_the_lock_on_timeout(monkeypatch):
+    import asyncio
+    from bot.jobs import sync_events as se
+
+    async def slow(*a, **kw):
+        await asyncio.sleep(10)
+
+    monkeypatch.setattr(se, "SYNC_TIMEOUT", 0.05)
+    monkeypatch.setattr(se.event_service, "fetch_upstream", slow)
+    monkeypatch.setattr(se.storage, "log_sync", lambda *a, **kw: None)
+
+    ok, detail = await se.sync_events()
+    assert ok is False and "timed out" in detail.lower()
+    assert not se._sync_lock.locked(), "lock leaked after a timeout"

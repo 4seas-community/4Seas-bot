@@ -24,18 +24,42 @@ log = logging.getLogger(__name__)
 _sync_lock = asyncio.Lock()
 
 
-async def sync_events(horizon_days: int | None = None) -> tuple[bool, str]:
-    """执行一次导入。返回 (是否成功, 给人看的结果描述)。"""
-    # 撞车时等待而不是放弃。早期版本直接返回 False，调用方（每日播报）会把它
-    # 当成"没有数据"，于是在冷启动 + 定时播报同时发生时往群里发一条
-    # "Nothing scheduled tomorrow"。锁只持有一次同步的时长（数秒），等得起。
-    if _sync_lock.locked():
-        log.info("a sync is in flight — waiting for it rather than reporting empty")
+# 单次同步的最坏耗时：列表最多 5 页 × 20s，加上详情补齐 ceil(N/6) 批 × 20s，
+# 合计可达 200s 上下 —— 不是"几秒"。所以等锁必须有上限，整次同步也要有上限。
+LOCK_WAIT_TIMEOUT = 240.0
+SYNC_TIMEOUT = 300.0
 
-    async with _sync_lock:
+
+async def sync_events(horizon_days: int | None = None) -> tuple[bool, str]:
+    """执行一次导入。返回 (是否成功, 给人看的结果描述)。
+
+    撞车时等待而不是放弃：早期版本直接返回 False，调用方（每日播报）把它当成
+    "没有数据"，于是在冷启动 + 定时播报同时发生时往群里发了一条
+    "Nothing scheduled tomorrow"。
+
+    但"无限期等下去"是另一个极端。持锁方若卡在没有超时保护的路径上（比如
+    upsert_events 撞上被别的进程锁住的 SQLite），等锁的一方会静默挂死 ——
+    既不失败也不成功，播报永远不发，也永远不告警。所以两处都设上限。
+    """
+    if _sync_lock.locked():
+        log.info("a sync is in flight — waiting up to %.0fs for it", LOCK_WAIT_TIMEOUT)
+
+    try:
+        await asyncio.wait_for(_sync_lock.acquire(), timeout=LOCK_WAIT_TIMEOUT)
+    except TimeoutError:
+        log.error("等锁超时（%.0fs）—— 上一次同步疑似卡死", LOCK_WAIT_TIMEOUT)
+        return False, f"Timed out after {LOCK_WAIT_TIMEOUT:.0f}s waiting for an in-flight sync"
+
+    try:
         days = settings.sync_horizon_days if horizon_days is None else horizon_days
         try:
-            outcome = await event_service.fetch_upstream(days)
+            outcome = await asyncio.wait_for(
+                event_service.fetch_upstream(days), timeout=SYNC_TIMEOUT
+            )
+        except TimeoutError:
+            log.error("同步超时（%.0fs）", SYNC_TIMEOUT)
+            storage.log_sync("unknown", SyncResult(), ok=False, error="timed out")
+            return False, f"Fetch timed out after {SYNC_TIMEOUT:.0f}s"
         except Exception as exc:
             log.error("活动同步失败：%s", exc, exc_info=True)
             storage.log_sync("unknown", SyncResult(), ok=False, error=str(exc))
@@ -47,6 +71,10 @@ async def sync_events(horizon_days: int | None = None) -> tuple[bool, str]:
         storage.log_sync(outcome.source, result, ok=True)
         log.info("活动同步完成（%s）：%s", outcome.source, result)
         return True, f"{outcome.source} · {result}"
+    finally:
+        # 必须放 finally —— 中间任何一条 return 或异常都不能把锁漏掉，
+        # 否则之后每次同步都会等满 LOCK_WAIT_TIMEOUT 然后失败。
+        _sync_lock.release()
 
 
 async def sync_events_job(context: ContextTypes.DEFAULT_TYPE) -> None:
