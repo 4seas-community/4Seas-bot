@@ -105,9 +105,12 @@ async def cmd_events(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await msg.reply_text(f"😵 Can't reach the event data right now. Try again shortly, or see {SOLA_URL}")
         return
 
+    # DIGEST_STYLE=editorial 在这里会落到 compact：editorial 的每场一句推荐要
+    # 走一次 LLM，而 /events 是一周的量、随时可能被任何人触发。列表就够了。
+    style = "compact" if settings.digest_style == "editorial" else settings.digest_style
     text = render_daily_report(
         events, days_ahead=days, today=dt.datetime.now(settings.zone).date(),
-        offset_days=0, style=settings.digest_style,
+        offset_days=0, style=style,
     )
     await msg.reply_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 

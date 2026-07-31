@@ -157,12 +157,16 @@ def _event_to_row(ev: Event, now_iso: str) -> dict:
         "require_approval": int(ev.require_approval),
         "url": ev.url,
     }
-    payload = json.dumps([row[f] for f in _HASH_FIELDS], ensure_ascii=False)
-    row["content_hash"] = hashlib.sha256(payload.encode("utf-8")).hexdigest()
     row["first_seen_at"] = now_iso
     row["updated_at"] = now_iso
     row["last_seen_at"] = now_iso
     return row
+
+
+def _hash_row(row: dict) -> str:
+    """Hash is computed after any backfill, never before — see upsert_events."""
+    payload = json.dumps([row[f] for f in _HASH_FIELDS], ensure_ascii=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _row_to_event(row: sqlite3.Row) -> Event:
@@ -250,16 +254,22 @@ class Storage:
 
             for ev in events:
                 prev = existing.get(ev.id)
+                row = _event_to_row(ev, now_iso)
+                row["source"] = source
+
                 if prev is not None:
-                    # 在算 hash 之前补回来。放到 SQL 里 COALESCE 也能保住数据，
+                    # 补在 row 上，不碰传入的 Event —— 就地 mutate 调用方的对象
+                    # 是个隐式契约，今天只有 sync_events 调且调完就丢，但下一个
+                    # 调用方拿到被改过的对象会很意外。
+                    #
+                    # 必须补在算 hash 之前。放到 SQL 里 COALESCE 也能保住数据，
                     # 但 hash 会按 None 算，和实际存的行对不上，下次同步依然误判
                     # "内容变了"。
                     for field_name in _ENRICHED_FIELDS:
-                        if getattr(ev, field_name) is None and prev[field_name] is not None:
-                            setattr(ev, field_name, prev[field_name])
+                        if row[field_name] is None and prev[field_name] is not None:
+                            row[field_name] = prev[field_name]
 
-                row = _event_to_row(ev, now_iso)
-                row["source"] = source
+                row["content_hash"] = _hash_row(row)
                 prev_hash = prev["content_hash"] if prev is not None else None
                 if prev_hash is None:
                     result.inserted += 1

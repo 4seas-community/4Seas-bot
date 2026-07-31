@@ -399,3 +399,17 @@ async def test_sync_releases_the_lock_on_timeout(monkeypatch):
     ok, detail = await se.sync_events()
     assert ok is False and "timed out" in detail.lower()
     assert not se._sync_lock.locked(), "lock leaked after a timeout"
+
+
+def test_upsert_does_not_mutate_the_caller_s_events(store):
+    """Backfilling enrichment must not reach back into the caller's objects —
+    an implicit contract like that is exactly what the next call site trips on."""
+    store.upsert_events([ev(venue="Library", content="Description.")], source="sola_api")
+
+    incoming = ev(venue=None, content=None)
+    store.upsert_events([incoming], source="sola_api")
+
+    assert incoming.venue_name is None, "upsert_events mutated the Event it was given"
+    assert incoming.content is None
+    # …while the stored row still keeps the old values
+    assert store.query_events(*window())[0].venue_name == "Library"
