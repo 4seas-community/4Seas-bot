@@ -102,6 +102,8 @@ async def send_daily_report(
             today=today,
             opening=copy.opening,
             lines=copy.lines,
+            subtitles=copy.subtitles,
+            venues=copy.venues,
             closing=copy.closing,
         )
         # 记在发送成功之后 —— 发失败还占掉一个"今天用过 X 角度"的名额，

@@ -175,6 +175,8 @@ def render_editorial(
     today: dt.date | None = None,
     opening: str = "",
     lines: dict[str, str] | None = None,
+    subtitles: dict[str, str] | None = None,
+    venues: dict[str, str] | None = None,
     closing: str = "",
 ) -> str:
     """The community-post layout.
@@ -197,6 +199,11 @@ def render_editorial(
     rather than printed empty or padded with filler.
     """
     lines = lines or {}
+    subtitles = subtitles or {}
+    venues = venues or {}
+    # No standalone date header: the opening names the day itself ("One Saturday,
+    # two ways to build…"). A bold date line above it just repeats that and makes
+    # the post read like a bulletin rather than a note to the community.
     date_line = f"<b>{target_date.strftime('%A, %-d %B')}</b>"
 
     if not events:
@@ -212,15 +219,24 @@ def render_editorial(
             f'Details:\n<a href="{SOLA_URL}">{SOLA_URL}</a>'
         )
 
-    parts: list[str] = [date_line]
-    if opening:
-        parts.append(esc(opening))
+    # The opening carries the day; fall back to the date line only when there is
+    # no opening (LLM unavailable), so the post never loses its date entirely.
+    parts: list[str] = [esc(opening)] if opening else [date_line]
 
     for ev in events:
-        block = [f"{fmt_span(ev, target_date)}｜<b>{esc(_short_title(ev.title, TITLE_MAX_EDITORIAL))}</b>"]
-        venue = ev.venue_name or ev.place_title
+        title = _short_title(ev.title, TITLE_MAX_EDITORIAL)
+        subtitle = (subtitles.get(ev.id) or "").strip()
+        # Organisers often put the strapline in the description rather than the
+        # title ("The Energy Table #02" + "Eat Smart · Lose Fat · Keep Energy").
+        if subtitle and subtitle.lower() not in title.lower():
+            title = f"{title}: {subtitle}"
+
+        block = [f"{fmt_span(ev, target_date)}｜<b>{esc(title)}</b>"]
+
+        venue = ev.venue_name or ev.place_title or (venues.get(ev.id) or "").strip()
         if venue:
             block.append(f"📍 {esc(venue)}")
+
         rec = (lines.get(ev.id) or "").strip()
         if rec:
             block.append(esc(rec))

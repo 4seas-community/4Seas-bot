@@ -221,3 +221,46 @@ def test_fallback_skips_the_title_restated_as_a_heading():
 def test_fallback_output_is_plain_prose():
     ev = make_event(content=MD)
     assert _fallback_line(ev) == " ".join(_fallback_line(ev).split())
+
+
+# ── Key facts must survive truncation ─────────────────────────────────
+
+
+LONG_DESC = (
+    "Welcome to the hackathon. " * 60          # ~1500 chars of filler
+    + "Prize: Total Prize Pool: THB 25,000 for the winning team. "
+    + "More filler about the schedule. " * 20
+    + "Participation is free of charge."
+)
+
+
+def test_salient_facts_reach_past_the_truncation_point():
+    """The hackathon's prize pool sits at character 1727 of a 2722-char description.
+    Truncating to 900 silently dropped exactly the detail the copy should lead with —
+    the model looked disobedient when it simply never saw the number."""
+    from bot.services.digest_writer import salient_facts
+    facts = salient_facts(LONG_DESC)
+    assert "THB 25,000" in facts
+    assert "free of charge" in facts
+
+
+def test_salient_facts_skips_filler():
+    from bot.services.digest_writer import salient_facts
+    assert "Welcome to the hackathon" not in salient_facts(LONG_DESC)
+
+
+def test_salient_facts_is_bounded():
+    from bot.services.digest_writer import salient_facts
+    assert len(salient_facts("Only 6 spots left. " * 200)) <= 520
+
+
+def test_salient_facts_empty_when_nothing_concrete():
+    from bot.services.digest_writer import salient_facts
+    assert salient_facts("A relaxed evening of conversation and music.") == ""
+
+
+def test_event_brief_exposes_key_facts_separately():
+    from bot.services.digest_writer import _event_brief
+    brief = _event_brief(make_event(content=LONG_DESC))
+    assert "THB 25,000" in brief["key_facts"]
+    assert len(brief["description"]) <= 900
