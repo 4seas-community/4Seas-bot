@@ -57,15 +57,19 @@ async def guard_allowed_chat(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # 自己会退避重连。给管理员推一整页 traceback 只会让人开始忽略告警 —— 等真出事
 # 那次也一起被忽略掉。所以：照常记日志，但只有持续发生才打扰人。
 TRANSIENT = (Conflict, NetworkError, TimedOut)
-TRANSIENT_ALERT_AFTER = 5      # 连续这么多次才告警
-TRANSIENT_WINDOW_SECONDS = 300  # 超过这个间隔就当作新的一串，计数清零
+TRANSIENT_ALERT_AFTER = 5        # 连续这么多次才告警
+TRANSIENT_WINDOW_SECONDS = 300   # 超过这个间隔就当作新的一串，计数清零
+# 跨过阈值之后还必须限频：真有两个实例并存时，getUpdates 冲突是几秒一次的，
+# 不限频就会从"一条 traceback"变成"每秒一条告警"，比原来的问题更糟。
+TRANSIENT_ALERT_COOLDOWN = 1800  # 30 分钟内最多再提醒一次
 
 _transient_streak = 0
 _transient_last = 0.0
+_transient_alerted_at = 0.0
 
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    global _transient_streak, _transient_last
+    global _transient_streak, _transient_last, _transient_alerted_at
 
     error = context.error
     if isinstance(error, TRANSIENT):
@@ -82,6 +86,15 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
             return
 
+        if now - _transient_alerted_at < TRANSIENT_ALERT_COOLDOWN:
+            log.warning(
+                "%s 已连续 %d 次（%.0f 分钟内已提醒过，不重复打扰）",
+                type(error).__name__, _transient_streak,
+                TRANSIENT_ALERT_COOLDOWN / 60,
+            )
+            return
+
+        _transient_alerted_at = now
         log.error("%s 已连续 %d 次，告警", type(error).__name__, _transient_streak)
         if settings.admin_ids:
             hint = (
@@ -101,6 +114,7 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     _transient_streak = 0
+    _transient_alerted_at = 0.0
     log.error("处理更新时出错", exc_info=error)
 
     if not settings.admin_ids:

@@ -658,6 +658,35 @@ async def test_a_persistent_conflict_does_alert(monkeypatch):
     assert len(sent) == 1, "should alert exactly once, on crossing the threshold"
 
 
+async def test_a_persistent_conflict_does_not_spam(monkeypatch):
+    """The first cut of this fix alerted on EVERY error past the threshold. Two
+    live instances conflict every few seconds, so that turns one traceback into a
+    message per second — worse than the problem it was meant to fix. My own test
+    only ran to the threshold and missed it."""
+    from telegram.error import Conflict
+    from bot.handlers import errors
+
+    monkeypatch.setattr(errors, "_transient_streak", 0)
+    monkeypatch.setattr(errors, "_transient_last", 0.0)
+    monkeypatch.setattr(errors, "_transient_alerted_at", 0.0)
+    monkeypatch.setattr(errors.settings, "telegram_admin_ids", "1")
+    errors.settings.__dict__.pop("admin_ids", None)
+
+    sent = []
+
+    class Ctx:
+        error = Conflict("terminated by other getUpdates request")
+        class bot:
+            @staticmethod
+            async def send_message(*a, **kw):
+                sent.append(a)
+
+    for _ in range(50):
+        await errors.on_error(None, Ctx())
+
+    assert len(sent) == 1, f"50 conflicts produced {len(sent)} alerts"
+
+
 async def test_a_real_bug_alerts_immediately(monkeypatch):
     """Only network-ish errors are debounced. A code bug must not be delayed."""
     from bot.handlers import errors
