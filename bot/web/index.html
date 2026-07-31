@@ -83,6 +83,7 @@
 
   <div class="bar">
     <button class="primary" id="add">+ New command</button>
+    <button id="sendDigest">Send digest now</button>
     <button id="reloadAll">Reload FAQ &amp; keywords</button>
     <button id="refresh">Refresh</button>
   </div>
@@ -282,6 +283,21 @@ $('f_reply').onblur = async () => {
 $('cancel').onclick = () => $('dlg').close();
 $('add').onclick = () => open(null);
 $('refresh').onclick = () => load();
+$('sendDigest').onclick = async () => {
+  // Name the destination in the prompt. This posts to DAILY_REPORT_CHAT_ID, not
+  // to whatever you were last looking at — confirming blind is how a test message
+  // ends up in the 776-member group.
+  const s = await api('/api/status').catch(() => null);
+  const target = s ? s.report.chat_id : 'the configured chat';
+  const scope = s ? s.report.scope : '';
+  if (!confirm(`Send the digest to chat ${target} right now?\n\nCovers: ${scope}\nThis posts immediately and cannot be undone.`)) return;
+  try {
+    const r = await api('/api/send-digest', {method:'POST'});
+    flash(`Sent to ${r.chat_id} — ${r.detail}`);
+    await load();
+  } catch (e) { flash(e.message, 'err'); }
+};
+
 $('reloadAll').onclick = async () => {
   try { await api('/api/reload', {method:'POST'}); flash('FAQ, keyword rules and commands reloaded'); await load(); }
   catch (e) { flash(e.message, 'err'); }

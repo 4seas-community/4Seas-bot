@@ -26,7 +26,7 @@ log = logging.getLogger(__name__)
 
 # Names owned by the code. A config file may not claim these.
 RESERVED = frozenset(
-    {"start", "help", "events", "ask", "faq", "sync", "report", "reload", "status"}
+    {"start", "help", "events", "ask", "faq", "sync", "reload", "status"}
 )
 
 VALID_NAME = re.compile(r"^[a-z0-9_]{1,32}$")

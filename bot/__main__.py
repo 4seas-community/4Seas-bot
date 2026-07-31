@@ -65,7 +65,6 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("ask", commands.cmd_ask))
     app.add_handler(CommandHandler("faq", commands.cmd_faq))
     app.add_handler(CommandHandler("sync", commands.cmd_sync))
-    app.add_handler(CommandHandler("report", commands.cmd_report))
     app.add_handler(CommandHandler("reload", commands.cmd_reload))
     app.add_handler(CommandHandler("status", commands.cmd_status))
 
