@@ -1,44 +1,91 @@
+<div align="center">
+
+<img src="docs/assets/logo-200.png" width="120" alt="4Seas Bot">
+
 # 4Seas Bot
 
-> 4Seas 社区的开源运营机器人。每晚预告次日活动、回答常见问题、响应互动、关键词主动触达。
-> 自托管、Apache-2.0、数据留在你自己的机器上。
+**每天晚上七点，替社区把明天的活动讲清楚。**
 
-Telegram: [@zuchiangmaibot](https://t.me/zuchiangmaibot) · 活动数据来自 [Social Layer / 4Seas](https://app.sola.day/event/4seas)
+[![release](https://img.shields.io/github/v/release/4seas-community/4Seas-bot?style=flat-square&color=2f6f4f)](https://github.com/4seas-community/4Seas-bot/releases)
+[![tests](https://img.shields.io/badge/tests-221%20passing-2f6f4f?style=flat-square)](tests/)
+[![license](https://img.shields.io/badge/license-Apache--2.0-lightgrey?style=flat-square)](LICENSE)
+[![python](https://img.shields.io/badge/python-3.11%2B-3776ab?style=flat-square)](pyproject.toml)
 
----
+[快速开始](#快速开始) · [管理页](#管理页) · [运营手册](#运营不用碰代码) · [架构](#它是怎么工作的)
 
-## 一、它做什么
-
-社区运营里重复度最高的四件事，交给它：
-
-| # | 能力 | 说明 |
-|---|---|---|
-| 1 | **每日活动预告** | 每天晚上 19:00（Asia/Bangkok）预告**明天**有什么活动，一行一场，点标题跳详情 |
-| 2 | **通用问答** | `/ask` 或 @ 它，基于社区 FAQ 知识库回答；答不上来的老实说答不上来，不编 |
-| 3 | **互动响应** | 新成员欢迎、被回复时接话、常用命令（`/events` `/faq` `/help`） |
-| 4 | **关键词主动触发** | 群里出现「住宿」「签证」「怎么报名」这类词，自动补一条有用的信息 |
-
-活动数据不用手填 —— 运营在 sola.day 建活动，bot 自动就预告了。
-
-### 活动是怎么进来的
-
-```
-Social Layer         08:30 / 18:30         本地 SQLite         每天 19:00
-api.sola.day    ──导入──▶   events 表   ──读库──▶  群内预告「明天有什么」
-(未来 60 天)                (幂等,无重复)
-```
-
-导入配了两个时间点：早上一次，晚上 18:30 再来一次 —— 后者保证白天新加的活动
-能赶上当晚 19:00 的预告。
-
-导入是**幂等**的：同一个活动无论同步多少次都只有一行。靠三层保证 ——
-主键 `(source, event_id)` + UPSERT、`content_hash` 判断内容有没有真的变过、
-上游取消的活动打软删除标记而不是物理删除。所以这个任务可以任意频率重跑，
-跑 100 次和跑 1 次的库状态完全一致。管理员随时可以 `/sync` 手动补一次。
+</div>
 
 ---
 
-## 二、快速开始
+社区运营里最耗人的从来不是「点发送」，是每天盯日历、把活动写成人愿意读的样子、回同样的问题。这个 bot 把这三件事接过去，**保留最后一步给你**：什么时候上线、对谁说话，你说了算。
+
+跑在 [@zuchiangmaibot](https://t.me/zuchiangmaibot)，服务清迈的 4Seas 社区。活动数据来自 [Social Layer](https://app.sola.day/event/4seas)。
+
+## 它每天做什么
+
+<table>
+<tr><td width="46%" valign="top">
+
+**每晚 19:00 · 明日预告**
+
+不是活动列表的转储，是一条**读得下去**的社群文案：开场一句抓住当天的调性，每场活动一句推荐，结尾呼应开场。
+
+推荐语里**必须出现具体信息**——奖金池、剩余名额、费用、截止时间。因为「一起来玩」说了等于没说。
+
+</td><td width="54%" valign="top">
+
+```
+Saturday, two ways to spend the day: build
+something smarter for the city, or learn to
+fuel your body better.
+
+10:00–19:00｜Nimman Mini Hackathon #1
+📍 Event Space - 1st Floor 4Seas Nimman
+Learn from experts, build prototypes, and
+pitch your solution for a chance at the
+THB 25,000 prize pool.
+
+11:00–13:00｜The Energy Table #02:
+        Eat Smart · Lose Fat · Keep Energy
+📍 Venue shared after registration
+A small-group lunch (only 6 spots, first
+come, first served)—pay for your meal
+only, no extra fee.
+
+Whether you're coding or cooking, there's
+a seat for you. 🙂
+
+Details:
+https://app.sola.day/event/4seas
+```
+
+</td></tr>
+</table>
+
+| | |
+|---|---|
+| 🗓 **每日预告** | 每晚 19:00（Asia/Bangkok）预告明天有什么 |
+| 💬 **通用问答** | `/ask` 或 @ 它，基于社区 FAQ 回答；**答不上来就说不知道，绝不编** |
+| 👋 **互动响应** | 新成员欢迎、被 @ 接话、`/events` 随时查 |
+| 🔑 **关键词触发** | 群里聊到常见话题自动补一条有用的，带冷却防刷屏 |
+| ⚙️ **自定义命令** | 丢个 YAML 或在网页上点几下，`/wifi` 就有了 |
+
+## 文案是怎么保证不重样的
+
+一个被要求「写得自然一点」的模型，一周之内必然收敛回同样那几句。所以这两条不靠提示词，靠**机制**：
+
+```
+开场/结尾   从命名角度集里选 → 选中的角度落库 → 次日排除最近两天用过的
+            （一天深度挡不住 A/B/A/B 交替，读一周还是能看出模板）
+
+邀请语      「也欢迎你自己发起活动」是计数器不是语感：
+            不到 4 天绝不触发，超过 6 天强制触发
+            （否则它会连输几次硬币，悄悄消失几周）
+```
+
+周一到周四清爽，周五轻快，周末松弛。禁用 "chill"。次日没活动就明说没有，**绝不拿别的日期的活动来凑**。
+
+## 快速开始
 
 需要 Python 3.11+。
 
@@ -46,95 +93,101 @@ api.sola.day    ──导入──▶   events 表   ──读库──▶  群�
 git clone git@github.com:4seas-community/4Seas-bot.git
 cd 4Seas-bot
 uv venv --python 3.11 && uv pip install -e ".[dev]"
-cp .env.example .env         # 填 token,见下
-./start.sh                   # 前台跑，Ctrl-C 停
-./start.sh --bg              # 后台跑，日志在 data/bot.log
-./start.sh --status          # 看状态
-./start.sh --stop            # 停
+cp .env.example .env        # 填 token
+./start.sh                  # 前台跑，Ctrl-C 停
 ```
 
-`start.sh` 会先检查虚拟环境和 `.env`，并且**拒绝启动第二个实例** ——
-Telegram 长轮询同一 token 只允许一个消费者，两个进程会互抢 update。
+```bash
+./start.sh --bg       # 后台，日志 data/bot.log
+./start.sh --status   # 看状态
+./start.sh --stop     # 停
+```
 
-启动时会自动补一次活动导入，所以第一次跑完库里就有数据了。
+启动会自动补一次活动导入，第一次跑完库里就有数据。`start.sh` **拒绝启动第二个实例**——Telegram 长轮询同一个 token 只允许一个消费者。
 
-### 必填环境变量
+<details>
+<summary><b>必填环境变量</b></summary>
 
 ```dotenv
-TELEGRAM_BOT_TOKEN=          # BotFather 给的 token
-TELEGRAM_ADMIN_IDS=          # 管理员 user id,逗号分隔
-TELEGRAM_ALLOWED_CHATS=      # 允许 bot 工作的群 id,逗号分隔(白名单,防止被拉进乱七八糟的群)
-DEEPSEEK_API_KEY=            # 问答用,主力模型
-OPENAI_API_KEY=              # 可选,DeepSeek 挂了时兜底
-SOLA_GROUP=4seas             # Social Layer 上的社区标识
-SYNC_TIMES=08:30,18:30       # 每天几点导入活动(逗号分隔,可配多个)
-SYNC_HORIZON_DAYS=60         # 一次导入未来多少天
-DAILY_REPORT_TIME=19:00      # 播报时间
-DAILY_REPORT_OFFSET_DAYS=1   # 播哪一天:0=当天,1=明天
-DAILY_REPORT_DAYS_AHEAD=0    # 从起始日再多播几天,0=只播那一天
-EVENTS_COMMAND_DAYS=7        # /events 默认看未来几天(从今天算起)
+TELEGRAM_BOT_TOKEN=          # BotFather 给的
+TELEGRAM_ADMIN_IDS=          # 管理员 user id，逗号分隔
+TELEGRAM_ALLOWED_CHATS=      # 白名单群 id
+DEEPSEEK_API_KEY=            # 问答主力
+OPENAI_API_KEY=              # 可选，兜底
+SOLA_GROUP=4seas
 TZ=Asia/Bangkok
 ```
 
-播报范围由 `OFFSET` + `AHEAD` 两个值组合：
+其余都能在管理页上改。完整清单见 [`.env.example`](.env.example)。
 
-| 想要的效果 | OFFSET | AHEAD |
+**怎么拿群 id**：把 bot 拉进群、发一条消息，然后 `python scripts/chat_ids.py`。⚠️ bot 运行时别跑这个，会抢 update。
+
+</details>
+
+<details>
+<summary><b>⚠️ 一个必做的手工步骤</b></summary>
+
+**关键词触发默认不工作。** Telegram bot 的 privacy mode 开着时，群里只能收到 `/命令` 和 @ 它的消息。
+
+BotFather → `/setprivacy` → 选中 bot → **Disable**，然后**把 bot 移出群再加回去**（对已在群里的 bot 不生效）。
+
+不改这步，其它三项能力正常，关键词触发**静默失效**。
+
+</details>
+
+<details>
+<summary><b>开机自启（macOS / Linux）</b></summary>
+
+```bash
+# macOS
+cp deploy/com.4seas.bot.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.4seas.bot.plist
+
+# Linux
+sudo cp deploy/4seas-bot.service /etc/systemd/system/
+sudo systemctl enable --now 4seas-bot
+```
+
+**跑在笔记本上要注意**：机器睡眠时 bot 挂起。19:00 那会儿如果睡着了，当晚预告不会发，**醒来也不补发**（`run_daily` 错过就是错过）。管理页上有「立即发送预告」可以补。
+
+</details>
+
+## 管理页
+
+bot 起来时同进程带一个管理页，**中英双语，默认中文**：
+
+```
+http://127.0.0.1:8477/?token=<WEB_TOKEN>
+```
+
+- **自定义命令** —— 增删改停，reply 框失焦即校验 Telegram HTML（少一个 `</code>` 整条消息会被拒收，而失败发生在群里、静默的）
+- **配置** —— 15 项运行时配置，保存即生效，改时间自动重排定时任务
+- **立即发送预告** —— 补发漏掉的那一晚
+
+切换目标群时会**先确认 bot 在不在那个群**：
+
+```
+-1001242897290  →  ✓ 4Seas Community — 775 members
+-1009999999999  →  ✗ 找不到这个群，请先把 bot 加进去
+```
+
+指向一个 bot 没加入的群，失败会发生在 19:00、在群里、只留一行没人看的日志。**要在人还盯着屏幕的时候就查出来。**
+
+> 默认只绑 `127.0.0.1` 且强制 token。远程访问走 SSH 隧道：`ssh -N -L 8477:127.0.0.1:8477 user@host`。
+> **密钥刻意不能在页面上改**——能改 bot token 的网页表单，等于把 localhost 页面变成凭据库。
+
+## 运营不用碰代码
+
+| 文件 | 管什么 | 怎么生效 |
 |---|---|---|
-| **每晚预告明天**（当前配置） | 1 | 0 |
-| 早上播今天 | 0 | 0 |
-| 每晚预告明天 + 后天 | 1 | 1 |
-| 今天起一整周 | 0 | 6 |
+| `data/faq.md` | 问答知识库 | `/reload` |
+| `data/keywords.yaml` | 关键词规则 | `/reload` |
+| `data/commands/*.yaml` | 自定义命令 | `/reload` 或管理页 |
 
-改这两个值不需要重新导入 —— 库里存的是未来 60 天，播报只是换个查询窗口。
-完整配置项见 [`.env.example`](.env.example)。
+<details>
+<summary><b>FAQ 里的隐藏检索别名</b></summary>
 
-### 跑测试
-
-```bash
-uv pip install -e ".[dev]"
-.venv/bin/python -m pytest -q
-```
-
-不需要 `.env`、不需要任何密钥 —— `tests/conftest.py` 会填占位配置，
-并显式关掉 `.env`，保证本机和 CI 跑的是同一套配置。
-
-### 怎么拿到群的 chat_id
-
-把 bot 拉进群、在群里发一条消息，然后：
-
-```bash
-.venv/bin/python scripts/chat_ids.py          # 读一次
-.venv/bin/python scripts/chat_ids.py --watch  # 蹲守,等新群出现
-```
-
-它会直接打印可以粘进 `.env` 的 `TELEGRAM_ALLOWED_CHATS=...`。
-
-⚠️ **bot 正在运行时别跑这个** —— 长轮询同一个 token 只允许一个消费者，会互相抢消息。
-另外超级群的 id 是负数且带 `-100` 前缀，别手滑写错。
-
-### ⚠️ 一个必做的手工步骤
-
-**关键词触发（能力 4）默认是不工作的。** Telegram bot 有 privacy mode，开启时 bot 在群里只能收到 `/命令` 和 @ 它的消息，普通聊天内容它看不见。
-
-去 BotFather：
-
-```
-/setprivacy → 选择 @zuchiangmaibot → Disable
-```
-
-然后**把 bot 移出群再重新加回去**（privacy mode 的变更对已在群里的 bot 不生效）。
-
-不改这一步，能力 1/2/3 正常，能力 4 静默失效。
-
----
-
-## 三、运营怎么改内容（不用碰代码）
-
-两个文件加一个目录，改完发 `/reload` 即生效（或在管理页上点）：
-
-### `data/faq.md` — 问答知识库
-
-普通 Markdown，按 `##` 分节。bot 会检索最相关的几节喂给模型，模型只能基于这些内容回答。
+bot 一律用英文回答，但成员会用中文、泰文提问。检索是词面匹配（BM25），中文查询对不上英文正文，所以每条加一行隐藏别名：
 
 ```markdown
 ## How do I join the community
@@ -143,124 +196,105 @@ uv pip install -e ".[dev]"
 Events are open — pick one on Social Layer and show up.
 ```
 
-**bot 一律用英文回复**（`REPLY_LANGUAGE`），但成员会用中文、泰文提问。
-BM25 是纯词面匹配，中文查询对不上英文正文，所以每条加一行
-`<!-- also: ... -->` 隐藏别名：参与检索，不进答案、不给模型看。
-少了它，中文提问会全部落到"我不确定"。
+参与检索，不进答案、不给模型看。**少了它，中文提问会全部落到「我不确定」。**
 
-### `data/keywords.yaml` — 关键词触发规则
+</details>
+
+<details>
+<summary><b>自定义命令</b></summary>
 
 ```yaml
-- id: join
-  match: ["how to join", "怎么加入", "如何加入"]   # 中英都写,回复统一英文
-  cooldown: 3600          # 同一个群 1 小时内最多触发一次,防刷屏
+- command: wifi              # → /wifi
+  description: 场地 Wi-Fi
   reply: |
-    🙌 Welcome! All events live on <a href="https://app.sola.day/event/4seas">Social Layer</a>.
-```
-
-`cooldown` 是必填的 —— 社区 bot 最容易翻车的地方就是关键词刷屏。
-
----
-
-## 四、命令
-
-| 命令 | 谁能用 | 作用 |
-|---|---|---|
-| `/start` `/help` | 所有人 | 介绍和命令列表 |
-| `/events` | 所有人 | 看**明天**的活动（跟 19:00 自动播报同一个窗口）；`/events 3` 看更多天 |
-| `/ask <问题>` | 所有人 | 基于 FAQ 提问（有频率限制） |
-| `/faq` | 所有人 | 列出 FAQ 目录 |
-| `/sync` | 管理员 | 立刻从 Social Layer 导入一次活动（幂等，随便点） |
-| `/reload` | 管理员 | 重新加载 faq.md、keywords.yaml、data/commands/ |
-| `/status` | 管理员 | 活动库存量、上次/下次同步、下次播报、问答用量 |
-
-`/events` 默认跟 19:00 的自动播报**共用同一个窗口**（`DAILY_REPORT_OFFSET_DAYS`
-+ `DAILY_REPORT_DAYS_AHEAD`），不另设配置 —— 有人查了 `/events` 之后又看到
-19:00 播出来的是另一批活动，那会被当成 bug。
-
-`/events` 不调 LLM（任何人都能随手发，没有频率限制），推荐语直接取主办方原文。
-
----
-
-## 五、自定义命令（不用写代码）
-
-在 `data/commands/` 放一个 YAML，群里发 `/reload`，命令立刻生效。删掉文件再 `/reload` 就移除。
-
-```yaml
-- command: wifi              # 必填 → /wifi
-  description: Venue Wi-Fi   # 显示在 /help 和 Telegram 命令菜单里
-  reply: |                   # 必填，Telegram HTML
     📶 <b>Wi-Fi</b>
     Network: <code>4Seas-Guest</code>
-  enabled: true              # false = 保留配置但不注册
+  enabled: true
   admin_only: false
   scope: all                 # all | group | private
 ```
 
-配置写错不会拖垮其它命令 —— `/reload` 会逐条报告哪个文件哪一行有问题，其余照常加载。
-内置命令名（`start help events ask faq sync report reload status`）不允许被覆盖，
-否则一个坏配置就能把 `/reload` 本身顶掉，你再也改不回来。
+配置写错不会拖垮其它命令——逐条报告哪个文件哪一行有问题，其余照常加载。内置命令名不允许被覆盖，否则一个坏配置就能把 `/reload` 本身顶掉，你再也改不回来。
 
-详见 [`data/commands/README.md`](data/commands/README.md)。
+</details>
 
-## 六、管理页
-
-bot 启动时会同时起一个本地管理页，改完立刻生效：
-
-- 增删改停自定义命令，reply 框失焦即校验 Telegram HTML
-- **Send digest now** —— 立即发送每日预告。19:00 的定时任务错过就是错过
-  （`run_daily` 不补发），笔记本那会儿睡着了，这是唯一的补发手段。
-  按钮会先确认目标群，因为它发到 `DAILY_REPORT_CHAT_ID`，不是你正在看的地方。
-
+## 它是怎么工作的
 
 ```
-http://127.0.0.1:8477/?token=<WEB_TOKEN>
+Social Layer          08:30 / 18:30            本地 SQLite            19:00
+api.sola.day    ────── 导入 ──────▶   events 表（幂等，无重复）  ────▶  群内预告
+未来 60 天              + 详情补齐              ▲              读库
+                                                │
+                                       /events  管理页  问答
 ```
 
-启动日志里有完整链接。默认**只绑 127.0.0.1** —— 这个页面能改 bot 在 776 人群里说什么，
-不该直接对公网开。远程访问走 SSH 隧道：
+**导入是幂等的**，三层保证：主键 `(source, event_id)` + UPSERT、`content_hash` 判断内容是否真的变过、上游取消的打软删除而非物理删除。跑 100 次和跑 1 次库状态完全一致。
+
+晚上 18:30 那次导入是专门给 19:00 兜底的——白天新加的活动能赶上当晚的预告。
+
+<details>
+<summary><b>数据源：从开源前端里挖出来的</b></summary>
+
+sola.day 没有公开 API 文档。端点是从它的开源前端 [`sociallayer-im/seastar-app`](https://github.com/sociallayer-im/seastar-app) 的 `packages/sola-sdk` 源码里读出来的：
+
+```
+列表  GET /api/v1/events?group_id=4seas&collection=upcoming
+详情  GET /api/v1/events/{id}          ← venue 和 content 只有这里有
+iCal  GET /api/v1/groups/4seas/calendar.ics   ← 降级用
+```
+
+**契约随时可能变**，所以字段缺失一律容错，单个活动解析失败只跳过它，不让整次导入挂掉。三级降级：`Sola API → iCal → 本地 YAML`。
+
+</details>
+
+<details>
+<summary><b>安全上认真对待的几件事</b></summary>
+
+**Prompt 注入** —— 任何人都能在 sola.day 上建活动，描述会进 LLM 的 prompt。两层防御：提示词里把活动内容标为不可信数据，输出侧 `strip_links()` 硬过滤。
+`esc()` 不够——**Telegram 对纯文本 URL 和 @handle 会自动加链接**，转义挡不住。显示名也一样过滤：改个名进群，bot 会替你把链接播给全群。
+
+**退群做成 opt-in** —— 非白名单群默认只静默忽略。白名单少填一个 id 就自动退出正式群、丢掉管理员身份，代价太大。
+
+**静默名单** —— 已加入但暂时不希望它开口的群，收消息、不说话。测试期把正式群放这儿，比从白名单里删掉安全。
+
+**发错比不发严重** —— 读不到数据时不发、不标记已播、只告警。发一条假的「明天没有活动」比沉默糟糕得多。
+
+</details>
+
+## 命令
+
+| 命令 | 谁能用 | 作用 |
+|---|---|---|
+| `/start` `/help` | 所有人 | 介绍和命令列表 |
+| `/events` | 所有人 | 看明天的活动（`/events 3` 看更多天） |
+| `/ask <问题>` | 所有人 | 基于 FAQ 提问 |
+| `/faq` | 所有人 | 列出 FAQ 目录 |
+| `/sync` | 管理员 | 立刻导入一次（幂等，随便点） |
+| `/reload` | 管理员 | 重载 FAQ、关键词、自定义命令 |
+| `/status` | 管理员 | 运行状态 |
+
+管理员命令对非管理员**不显示也不响应**。判定只看 `.env` 里的 user id 白名单，与「群管理员」无关。
+
+## 开发
 
 ```bash
-ssh -N -L 8477:127.0.0.1:8477 user@host
+uv pip install -e ".[dev]"
+python -m pytest -q          # 221 passing
 ```
 
-`WEB_TOKEN` 留空的话每次启动随机生成并打进日志（链接会变）；填了才稳定。
-绑非回环地址而没显式设 token 时，管理页拒绝启动。
+不需要 `.env`、不需要任何密钥——`tests/conftest.py` 会填占位配置并显式关掉 `.env`，保证本机和 CI 跑的是同一套。
 
-管理页起不来（端口占用等）**不会影响 bot 本身** —— 只记一条 error，Telegram 照常跑。
+## 路线图
 
-## 七、成本与安全
-
-- **LLM 只在 `/ask` 和 @ 时调用**，关键词触发走固定模板，不烧 token。
-- 每用户每小时问答次数上限，超了礼貌拒绝。
-- 群白名单：不在 `TELEGRAM_ALLOWED_CHATS` 里的群，bot **静默忽略**（不是退群）。
-  退群做成 opt-in（`LEAVE_UNKNOWN_CHATS`）—— 白名单少填一个 id 就自动退出正式群、
-  丢掉管理员身份，代价太大。
-- `TELEGRAM_MUTED_CHATS` 里的群：收消息但一句话不说。测试期把正式群放这里，
-  比从白名单里删掉安全。
-- 管理页默认只绑 127.0.0.1，且强制 token。
-- 所有密钥走环境变量，仓库里只有 `.env.example`。
+- [x] Telegram：每日预告、问答、互动、关键词
+- [x] 管理页：命令管理 + 运行时配置 + 中英双语
+- [ ] 接本地模型（`Qwen3.6-35B-A3B` MLX，实测质量与 DeepSeek 打平，零成本、数据不出机器）
+- [ ] Twitter/X：定时发推、活动同步（**前置**：X API 凭据；免费档大概率读不了 mentions）
+- [ ] 入群验证反广告
 
 ---
 
-## 八、路线图
-
-**一期（已完成）· Telegram**
-四项核心能力 + Social Layer 活动幂等导入 + 自托管部署。
-
-**二期 · Twitter/X**
-参考 [CBots](https://github.com/jhfnetboy/CBots) 已验证的功能形态：定时发推、被 @ 时自动回复、活动同步发 X。
-⚠️ 前置条件：需要 X API 凭据（当前尚未申请），且 X API 免费档限制严格，详见 [技术设计文档](docs/TECH-DESIGN.md#二期twitterx)。
-
-**未来**
-反广告入群验证（参考 [captcha-bot](https://github.com/AAStarCommunity/captcha-bot)）、活动报名提醒、社区数据看板。
-
----
-
-## 九、文档
-
-- [技术设计文档](docs/TECH-DESIGN.md) —— 架构、数据源、框架选型对比、部署方案、里程碑
-
-## License
-
-Apache-2.0
+<div align="center">
+<sub>Apache-2.0 · 自托管 · 数据留在你自己的机器上</sub><br>
+<sub>logo 由本地 FLUX.2 Klein 生成，没有调用任何云端服务</sub>
+</div>

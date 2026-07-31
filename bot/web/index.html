@@ -71,6 +71,7 @@
           background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
           padding:12px 14px;white-space:pre-wrap;margin-top:26px}
   .empty{color:var(--dim);text-align:center;padding:44px 0;font-size:14px}
+  .lang{font-size:12.5px;padding:4px 10px;color:var(--dim)}
   .tabs{display:flex;gap:4px;margin:4px 0 16px;border-bottom:1px solid var(--line)}
   .tab{border:none;border-bottom:2px solid transparent;border-radius:0;background:none;
        padding:8px 14px;color:var(--dim)}
@@ -93,22 +94,23 @@
 <div class="wrap">
   <header>
     <h1>4Seas Bot</h1>
-    <span class="sub">command management</span>
+    <span class="sub" id="hSub"></span>
+    <span style="margin-left:auto"><button class="lang" id="langToggle"></button></span>
   </header>
-  <div class="sub">Changes take effect immediately — no restart, no <code>/reload</code> needed.</div>
+  <div class="sub" id="hTag"></div>
 
   <div class="bar">
-    <button class="primary" id="add">+ New command</button>
-    <button id="sendDigest">Send digest now</button>
-    <button id="reloadAll">Reload FAQ &amp; keywords</button>
-    <button id="refresh">Refresh</button>
+    <button class="primary" id="add"></button>
+    <button id="sendDigest"></button>
+    <button id="reloadAll"></button>
+    <button id="refresh"></button>
   </div>
 
   <div class="msg" id="msg"></div>
 
   <div class="tabs">
-    <button class="tab on" data-tab="commands">Commands</button>
-    <button class="tab" data-tab="settings">Settings</button>
+    <button class="tab on" data-tab="commands" id="tabC"></button>
+    <button class="tab" data-tab="settings" id="tabS"></button>
   </div>
 
   <div id="pane-commands">
@@ -118,7 +120,7 @@
   <div id="pane-settings" hidden>
     <div id="settings"></div>
     <div class="bar">
-      <button class="primary" id="saveSettings">Save settings</button>
+      <button class="primary" id="saveSettings"></button>
       <span class="sub" id="tzNote"></span>
     </div>
   </div>
@@ -129,54 +131,112 @@
   <h2 id="dlgTitle" style="margin:0 0 4px;font-size:17px">New command</h2>
   <div class="sub" id="dlgSub"></div>
 
-  <label>Command</label>
+  <label data-i18n="fCommand"></label>
   <input type="text" id="f_command" autocomplete="off" spellcheck="false" placeholder="wifi">
-  <div class="hint">Lowercase letters, digits and underscore. Becomes <code>/wifi</code>.</div>
+  <div class="hint" data-i18n-html="hintCommand"></div>
 
-  <label>Description</label>
+  <label data-i18n="fDesc"></label>
   <input type="text" id="f_description" autocomplete="off" placeholder="Venue Wi-Fi details">
-  <div class="hint">Shown in <code>/help</code> and Telegram's command menu.</div>
+  <div class="hint" data-i18n-html="hintDesc"></div>
 
-  <label>Reply</label>
+  <label data-i18n="fReply"></label>
   <textarea id="f_reply" spellcheck="false" placeholder="📶 &lt;b&gt;Wi-Fi&lt;/b&gt;&#10;Network: &lt;code&gt;4Seas-Guest&lt;/code&gt;"></textarea>
-  <div class="hint">HTML: <code>&lt;b&gt; &lt;i&gt; &lt;u&gt; &lt;s&gt; &lt;code&gt; &lt;pre&gt; &lt;a href=""&gt;</code>.
-    Literal <code>&lt; &gt; &amp;</code> must be escaped or Telegram rejects the message.</div>
+  <div class="hint" data-i18n-html="hintReply"></div>
 
   <div class="cols">
     <div>
-      <label>Scope</label>
+      <label data-i18n="fScope"></label>
       <select id="f_scope">
-        <option value="all">Anywhere</option>
-        <option value="group">Groups only</option>
-        <option value="private">Private chat only</option>
+        <option value="all" data-i18n="scopeAll"></option>
+        <option value="group" data-i18n="scopeGroup"></option>
+        <option value="private" data-i18n="scopePrivate"></option>
       </select>
     </div>
     <div>
-      <label>Parse mode</label>
+      <label data-i18n="fParse"></label>
       <select id="f_parse_mode">
         <option>HTML</option><option>Markdown</option>
-        <option>MarkdownV2</option><option value="none">Plain text</option>
+        <option>MarkdownV2</option><option value="none" data-i18n="parsePlain"></option>
       </select>
     </div>
   </div>
 
   <div class="checks">
-    <label class="check"><input type="checkbox" id="f_enabled" checked> Enabled</label>
-    <label class="check"><input type="checkbox" id="f_admin_only"> Admins only</label>
-    <label class="check"><input type="checkbox" id="f_disable_preview" checked> No link preview</label>
+    <label class="check"><input type="checkbox" id="f_enabled" checked> <span data-i18n="enabled"></span></label>
+    <label class="check"><input type="checkbox" id="f_admin_only"> <span data-i18n="adminOnly"></span></label>
+    <label class="check"><input type="checkbox" id="f_disable_preview" checked> <span data-i18n="noPreview"></span></label>
   </div>
 
   <div class="msg err" id="dlgMsg"></div>
 
   <div class="dlg-foot">
-    <button type="button" id="cancel">Cancel</button>
-    <button type="button" class="primary" id="save">Save</button>
+    <button type="button" id="cancel" data-i18n="cancel"></button>
+    <button type="button" class="primary" id="save" data-i18n="ok"></button>
   </div>
 </form></dialog>
 
 <script>
 const token = new URLSearchParams(location.search).get('token') || sessionStorage.getItem('t') || '';
 if (token) sessionStorage.setItem('t', token);
+
+// ── i18n ─────────────────────────────────────────────────────────────
+// 中文是默认：日常用这个页面的是社区运营，不是写代码的人。
+const STR = {
+  zh: {
+    subtitle: '机器人管理', tagline: '改动立即生效，不用重启，也不用发 /reload。',
+    tabCommands: '自定义命令', tabSettings: '配置',
+    add: '+ 新建命令', sendDigest: '立即发送预告', reloadAll: '重载 FAQ 与关键词',
+    refresh: '刷新', save: '保存配置',
+    dlgNew: '新建命令', dlgEdit: '编辑 /', fCommand: '命令', fDesc: '说明', fReply: '回复内容',
+    fScope: '生效范围', fParse: '解析模式', enabled: '已启用', disabled: '已停用',
+    adminOnly: '仅管理员', noPreview: '不显示链接预览',
+    scopeAll: '任何地方', scopeGroup: '仅群聊', scopePrivate: '仅私聊', parsePlain: '纯文本',
+    cancel: '取消', ok: '保存', edit: '编辑', disable: '停用', enable: '启用', del: '删除',
+    empty: '还没有自定义命令，点上面新建一个。',
+    hintCommand: '小写字母、数字、下划线。会变成 /wifi 这样的命令。',
+    hintDesc: '显示在 /help 和 Telegram 的命令菜单里。',
+    hintReply: 'HTML：<b> <i> <u> <s> <code> <pre> <a href="">。字面的 &lt; &gt; &amp; 必须转义，否则 Telegram 整条拒收。',
+    sharesFile: (f, n) => `保存会重写 ${f}，那里还有另外 ${n} 条命令，文件里的注释会丢失。`,
+    confirmDel: n => `删除 /${n}？会从配置文件里移除。`,
+    confirmSend: (c, s) => `现在把预告发到群 ${c}？\n\n覆盖范围：${s}\n发出去就撤不回来了。`,
+    confirmSave: (c, t) => `保存配置？\n\n预告将在 ${t} 发到群 ${c || '（未设置）'}。\n立即生效。`,
+    saved: '配置已保存', sentTo: (c, d) => `已发送到 ${c} — ${d}`,
+    reloaded: 'FAQ、关键词和命令已重载', checking: '检查中…',
+    tz: t => `时间按 ${t} 时区`,
+    changedHere: '在此改过', reschedules: '会重排定时任务',
+    stEvents: '活动', stLive: '在架', stTotal: '总计', stLastSync: '上次导入',
+    stNever: '从未', stSyncAt: '导入时间', stDigest: '播报', stFaq: 'FAQ 条目',
+    stKeywords: '关键词规则', stCommands: '自定义命令', stMuted: '静默群', stDaily: '每天',
+  },
+  en: {
+    subtitle: 'command management', tagline: 'Changes take effect immediately — no restart, no /reload.',
+    tabCommands: 'Commands', tabSettings: 'Settings',
+    add: '+ New command', sendDigest: 'Send digest now', reloadAll: 'Reload FAQ & keywords',
+    refresh: 'Refresh', save: 'Save settings',
+    dlgNew: 'New command', dlgEdit: 'Edit /', fCommand: 'Command', fDesc: 'Description', fReply: 'Reply',
+    fScope: 'Scope', fParse: 'Parse mode', enabled: 'enabled', disabled: 'disabled',
+    adminOnly: 'admins only', noPreview: 'No link preview',
+    scopeAll: 'Anywhere', scopeGroup: 'Groups only', scopePrivate: 'Private chat only', parsePlain: 'Plain text',
+    cancel: 'Cancel', ok: 'Save', edit: 'Edit', disable: 'Disable', enable: 'Enable', del: 'Delete',
+    empty: 'No custom commands yet. Create one above.',
+    hintCommand: 'Lowercase letters, digits and underscore. Becomes /wifi.',
+    hintDesc: "Shown in /help and Telegram's command menu.",
+    hintReply: 'HTML: <b> <i> <u> <s> <code> <pre> <a href="">. Literal &lt; &gt; &amp; must be escaped.',
+    sharesFile: (f, n) => `Saving rewrites ${f}, which holds ${n} other command(s). Comments there will be lost.`,
+    confirmDel: n => `Delete /${n}? This removes it from the config file.`,
+    confirmSend: (c, s) => `Send the digest to chat ${c} right now?\n\nCovers: ${s}\nThis posts immediately and cannot be undone.`,
+    confirmSave: (c, t) => `Save settings?\n\nThe digest will go to chat ${c || '(none)'} at ${t}.\nThis takes effect immediately.`,
+    saved: 'Settings saved', sentTo: (c, d) => `Sent to ${c} — ${d}`,
+    reloaded: 'FAQ, keyword rules and commands reloaded', checking: 'checking…',
+    tz: t => `times are ${t}`,
+    changedHere: 'changed here', reschedules: 'reschedules jobs',
+    stEvents: 'events', stLive: 'live', stTotal: 'total', stLastSync: 'last sync',
+    stNever: 'never', stSyncAt: 'sync at', stDigest: 'digest', stFaq: 'faq',
+    stKeywords: 'keywords', stCommands: 'commands', stMuted: 'muted', stDaily: 'daily',
+  },
+};
+let lang = localStorage.getItem('lang') || 'zh';
+const t = k => STR[lang][k];
 
 const $ = id => document.getElementById(id);
 let editing = null;
@@ -208,7 +268,7 @@ function render(data) {
   if (problems.length) flash(problems.join(' · '), 'warn');
 
   if (!data.commands.length) {
-    list.innerHTML = '<div class="empty">No custom commands yet. Create one above.</div>';
+    list.innerHTML = `<div class="empty">${t('empty')}</div>`;
     return;
   }
 
@@ -219,17 +279,16 @@ function render(data) {
           <div class="name">/${esc(c.command)}</div>
           ${c.description ? `<div class="desc">${esc(c.description)}</div>` : ''}
           <div class="tags">
-            <span class="tag ${c.enabled ? 'on' : 'off'}">${c.enabled ? 'enabled' : 'disabled'}</span>
-            ${c.admin_only ? '<span class="tag">admins only</span>' : ''}
-            ${c.scope !== 'all' ? `<span class="tag">${esc(c.scope)} only</span>` : ''}
+            <span class="tag ${c.enabled ? 'on' : 'off'}">${c.enabled ? t('enabled') : t('disabled')}</span>
+            ${c.admin_only ? `<span class="tag">${t('adminOnly')}</span>` : ''}
+            ${c.scope !== 'all' ? `<span class="tag">${esc(c.scope)}</span>` : ''}
             <span class="tag">${esc(c.source_file)}</span>
-            ${c.siblings ? `<span class="tag">shares file with ${c.siblings}</span>` : ''}
           </div>
         </div>
         <div class="actions">
-          <button data-act="edit" data-n="${esc(c.command)}">Edit</button>
-          <button data-act="toggle" data-n="${esc(c.command)}">${c.enabled ? 'Disable' : 'Enable'}</button>
-          <button class="danger" data-act="del" data-n="${esc(c.command)}">Delete</button>
+          <button data-act="edit" data-n="${esc(c.command)}">${t('edit')}</button>
+          <button data-act="toggle" data-n="${esc(c.command)}">${c.enabled ? t('disable') : t('enable')}</button>
+          <button class="danger" data-act="del" data-n="${esc(c.command)}">${t('del')}</button>
         </div>
       </div>
       <div class="reply">${esc(c.reply)}</div>
@@ -249,7 +308,7 @@ async function act(kind, name, all) {
       flash(`/${name} ${cmd.enabled ? 'disabled' : 'enabled'}`);
     }
     if (kind === 'del') {
-      if (!confirm(`Delete /${name}? This removes it from the config file.`)) return;
+      if (!confirm(t('confirmDel')(name))) return;
       await api(`/api/commands/${name}`, {method:'DELETE'});
       flash(`/${name} deleted`);
     }
@@ -259,10 +318,8 @@ async function act(kind, name, all) {
 
 function open(cmd) {
   editing = cmd ? cmd.command : null;
-  $('dlgTitle').textContent = cmd ? `Edit /${cmd.command}` : 'New command';
-  $('dlgSub').textContent = cmd && cmd.siblings
-    ? `Saving rewrites ${cmd.source_file}, which holds ${cmd.siblings} other command(s). Comments in that file will be lost.`
-    : '';
+  $('dlgTitle').textContent = cmd ? t('dlgEdit') + cmd.command : t('dlgNew');
+  $('dlgSub').textContent = cmd && cmd.siblings ? t('sharesFile')(cmd.source_file, cmd.siblings) : '';
   $('f_command').value = cmd?.command || '';
   $('f_description').value = cmd?.description || '';
   $('f_reply').value = cmd?.reply || '';
@@ -322,17 +379,40 @@ $('sendDigest').onclick = async () => {
   const s = await api('/api/status').catch(() => null);
   const target = s ? s.report.chat_id : 'the configured chat';
   const scope = s ? s.report.scope : '';
-  if (!confirm(`Send the digest to chat ${target} right now?\n\nCovers: ${scope}\nThis posts immediately and cannot be undone.`)) return;
+  if (!confirm(t('confirmSend')(target, scope))) return;
   try {
     const r = await api('/api/send-digest', {method:'POST'});
-    flash(`Sent to ${r.chat_id} — ${r.detail}`);
+    flash(t('sentTo')(r.chat_id, r.detail));
     await load();
   } catch (e) { flash(e.message, 'err'); }
 };
 
 $('reloadAll').onclick = async () => {
-  try { await api('/api/reload', {method:'POST'}); flash('FAQ, keyword rules and commands reloaded'); await load(); }
+  try { await api('/api/reload', {method:'POST'}); flash(t('reloaded')); await load(); }
   catch (e) { flash(e.message, 'err'); }
+};
+
+function applyLang() {
+  document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
+  $('langToggle').textContent = lang === 'zh' ? 'EN' : '中文';
+  $('hSub').textContent = t('subtitle');
+  $('hTag').textContent = t('tagline');
+  $('tabC').textContent = t('tabCommands');
+  $('tabS').textContent = t('tabSettings');
+  $('add').textContent = t('add');
+  $('sendDigest').textContent = t('sendDigest');
+  $('reloadAll').textContent = t('reloadAll');
+  $('refresh').textContent = t('refresh');
+  $('saveSettings').textContent = t('save');
+  document.querySelectorAll('[data-i18n]').forEach(el => el.textContent = t(el.dataset.i18n));
+  document.querySelectorAll('[data-i18n-html]').forEach(el => el.innerHTML = t(el.dataset.i18nHtml));
+}
+
+$('langToggle').onclick = () => {
+  lang = lang === 'zh' ? 'en' : 'zh';
+  localStorage.setItem('lang', lang);
+  applyLang(); load();
+  if (!$('pane-settings').hidden) loadSettings();
 };
 
 // ── settings ──────────────────────────────────────────────────────────
@@ -356,21 +436,26 @@ function fieldInput(f) {
 
 async function loadSettings() {
   const d = await api('/api/settings');
-  $('tzNote').textContent = `times are ${d.timezone}`;
+  $('tzNote').textContent = t('tz')(d.timezone);
+  const L = f => lang === 'zh' ? f.label_zh : f.label;
+  const H = f => lang === 'zh' ? f.help_zh : f.help;
   const groups = [...new Set(d.fields.map(f => f.group))];
-  $('settings').innerHTML = groups.map(g => `
-    <div class="grp">${esc(g)}</div>
+  $('settings').innerHTML = groups.map(g => {
+    const gz = (d.fields.find(f => f.group === g) || {}).group_zh || g;
+    return `
+    <div class="grp">${esc(lang === 'zh' ? gz : g)}</div>
     ${d.fields.filter(f => f.group === g).map(f => `
       <div class="fld">
         <div class="top">
-          <label for="s_${f.key}">${esc(f.label)}</label>
-          <span>${f.overridden ? '<span class="pill">changed here</span>' : ''}
-                ${f.reschedules ? '<span class="pill">reschedules jobs</span>' : ''}</span>
+          <label for="s_${f.key}">${esc(L(f))}</label>
+          <span>${f.overridden ? `<span class="pill">${t('changedHere')}</span>` : ''}
+                ${f.reschedules ? `<span class="pill">${t('reschedules')}</span>` : ''}</span>
         </div>
-        <div class="help">${esc(f.help)}</div>
+        <div class="help">${esc(H(f))}</div>
         ${fieldInput(f)}
         ${f.key === 'daily_report_chat_id' ? '<div class="chk" id="chatCheck"></div>' : ''}
-      </div>`).join('')}`).join('');
+      </div>`).join('')}`;
+  }).join('');
 
   // Verify the target chat as soon as it is typed — the bot must already be a
   // member, and finding that out at 19:00 from a log line is far too late.
@@ -378,7 +463,7 @@ async function loadSettings() {
   if (chat) chat.onblur = async () => {
     const box = $('chatCheck');
     if (!chat.value.trim()) { box.textContent = ''; return; }
-    box.textContent = 'checking…'; box.className = 'chk';
+    box.textContent = t('checking'); box.className = 'chk';
     try {
       const r = await api('/api/check-chat', {method:'POST', body: JSON.stringify({chat_id: chat.value})});
       if (r.problem) { box.textContent = `✗ ${r.problem}`; box.className = 'chk bad'; }
@@ -396,10 +481,10 @@ $('saveSettings').onclick = async () => {
     payload[f.key] = f.kind === 'bool' ? el.checked : el.value;
   }
   const target = payload.daily_report_chat_id;
-  if (!confirm(`Save settings?\n\nThe digest will go to chat ${target || '(none)'} at ${payload.daily_report_time}.\nThis takes effect immediately.`)) return;
+  if (!confirm(t('confirmSave')(target, payload.daily_report_time))) return;
   try {
     const r = await api('/api/settings', {method:'PUT', body: JSON.stringify(payload)});
-    flash(['Settings saved', ...(r.notes || [])].join(' · '), (r.notes || []).some(n => n.includes('⚠️')) ? 'warn' : 'ok');
+    flash([t('saved'), ...(r.notes || [])].join(' · '), (r.notes || []).some(n => n.includes('⚠️')) ? 'warn' : 'ok');
     await loadSettings(); await load();
   } catch (e) { flash(e.message, 'err'); }
 };
@@ -409,20 +494,22 @@ async function load() {
     render(await api('/api/commands'));
     const s = await api('/api/status');
     const ls = s.last_sync;
+    const pad = k => (t(k) + '            ').slice(0, lang === 'zh' ? 9 : 12);
     $('status').textContent = [
-      `events      ${s.events.live} live / ${s.events.total} total`,
-      `last sync   ${ls ? `${ls.ok ? 'ok' : 'FAILED'}  ${ls.at.slice(0,16).replace('T',' ')} UTC  ` +
-        `fetched ${ls.fetched} · new ${ls.inserted} · updated ${ls.updated} · unchanged ${ls.unchanged}` : 'never'}`,
-      `sync at     ${s.sync_times} daily`,
-      `digest      ${s.report.time} daily → chat ${s.report.chat_id} (${s.report.scope})`,
-      `faq         ${s.faq_entries} entries`,
-      `keywords    ${s.keyword_rules} rules`,
-      `commands    ${s.custom_commands} live`,
-      s.muted_chats.length ? `muted       ${s.muted_chats.join(', ')}` : null,
+      `${pad('stEvents')}${s.events.live} ${t('stLive')} / ${s.events.total} ${t('stTotal')}`,
+      `${pad('stLastSync')}${ls ? `${ls.ok ? 'ok' : 'FAILED'}  ${ls.at.slice(0,16).replace('T',' ')} UTC  ` +
+        `+${ls.inserted} ~${ls.updated} =${ls.unchanged}` : t('stNever')}`,
+      `${pad('stSyncAt')}${s.sync_times}`,
+      `${pad('stDigest')}${s.report.time} → ${s.report.chat_id} (${s.report.scope})`,
+      `${pad('stFaq')}${s.faq_entries}`,
+      `${pad('stKeywords')}${s.keyword_rules}`,
+      `${pad('stCommands')}${s.custom_commands}`,
+      s.muted_chats.length ? `${pad('stMuted')}${s.muted_chats.join(', ')}` : null,
     ].filter(Boolean).join('\n');
   } catch (e) { flash(e.message, 'err'); }
 }
 
+applyLang();
 load();
 </script>
 </body>
