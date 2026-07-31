@@ -65,7 +65,11 @@ def check_telegram_html(text: str) -> str | None:
             stack.append(tag)
     if stack:
         opened = ", ".join(f"<{t}>" for t in stack)
-        return f"unclosed tag: {opened} — add the matching closing tag"
+        # "if a < b > c" parses as an opening <b>. Telegram requires bare < > &
+        # to be escaped, so flagging it is right — but "unclosed tag" alone sends
+        # the author hunting for a tag they never meant to write.
+        hint = " — add the matching closing tag, or escape a literal < as &lt;"
+        return f"unclosed tag: {opened}{hint}"
     return None
 VALID_SCOPES = frozenset({"all", "group", "private"})
 VALID_PARSE_MODES = frozenset({"HTML", "Markdown", "MarkdownV2", "none"})
