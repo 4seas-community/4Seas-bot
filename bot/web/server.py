@@ -168,8 +168,12 @@ class AdminServer:
         return web.json_response({
             "fields": [
                 {
-                    "key": f.key, "kind": f.kind, "label": f.label, "help": f.help,
-                    "group": f.group, "choices": list(f.choices),
+                    "key": f.key, "kind": f.kind,
+                    "label": f.label, "help": f.help, "group": f.group,
+                    "label_zh": f.label_zh or f.label,
+                    "help_zh": f.help_zh or f.help,
+                    "group_zh": rc.GROUPS.get(f.group, f.group),
+                    "choices": list(f.choices),
                     "min": f.minimum, "max": f.maximum,
                     "reschedules": f.reschedules, "sensitive": f.sensitive,
                     "value": getattr(_s, f.key, None),
