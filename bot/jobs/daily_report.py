@@ -18,20 +18,35 @@ from .sync_events import sync_events
 log = logging.getLogger(__name__)
 
 
+class EventsUnavailable(RuntimeError):
+    """读不到数据 —— 和「这天确实没有活动」是两回事，绝不能混为一谈。"""
+
+
 async def load_events(
     days_ahead: int, *, offset_days: int = 0, allow_sync: bool = True
 ) -> list[Event]:
-    """读库取活动。库里为空且允许同步时，先补一次同步再读。"""
+    """读库取活动。
+
+    空结果有两种可能，必须分开：
+      a) 库里有数据，只是这个时间窗没有 → 真的没活动，返回 []
+      b) 库整个是空的（冷启动 / 从没同步成功过）→ 补一次同步；同步也失败就
+         抛 EventsUnavailable
+
+    混淆这两者的后果是往 776 人的群里发一条"Nothing scheduled tomorrow"，
+    而实际上只是我们没读到数据。
+    """
     start, end = day_window(days_ahead, settings.zone, offset_days=offset_days)
     events = storage.query_events(start, end)
     if events or not allow_sync:
         return events
 
-    # 冷启动，或定时同步还没跑过
-    log.info("库内该时段无活动，先触发一次同步")
+    if storage.event_stats()["live"] > 0:
+        return []  # 库里有别的活动，说明这天确实是空的
+
+    log.info("库是空的，先补一次同步再判断")
     ok, detail = await sync_events()
     if not ok:
-        log.warning("补同步失败：%s", detail)
+        raise EventsUnavailable(detail)
     return storage.query_events(start, end)
 
 
@@ -55,9 +70,16 @@ async def send_daily_report(
     try:
         events = await load_events(days, offset_days=offset)
     except Exception as exc:
-        log.error("取活动失败：%s", exc, exc_info=True)
-        await _alert_admins(context, f"⚠️ Daily digest failed to load events: {exc}")
-        return f"Failed to load events: {exc}"
+        # 关键：不发消息、不标记已播。发一条假的"今天没活动"比不发严重得多，
+        # 而且 mark_reported 之后当天就再也不会重试了。
+        log.error("取活动失败，本次不播报：%s", exc, exc_info=True)
+        await _alert_admins(
+            context,
+            f"⚠️ Daily digest skipped — could not load events: {exc}\n"
+            f"Nothing was sent to {chat_id}. It will retry on the next run, "
+            f"or use /report once the data source is back.",
+        )
+        return f"Skipped — could not load events: {exc}"
 
     if not events and not settings.daily_report_when_empty:
         log.info("no events for the target day; configured to stay silent")
@@ -77,6 +99,7 @@ async def send_daily_report(
         text = render_editorial(
             events,
             target_date=target_date,
+            today=today,
             opening=copy.opening,
             lines=copy.lines,
             closing=copy.closing,
@@ -102,19 +125,24 @@ async def send_daily_report(
         disable_web_page_preview=True,
     )
 
-    if pending_digest is not None:
-        storage.record_digest(
-            target_date,
-            opening_angle=pending_digest.opening_angle,
-            closing_angle=pending_digest.closing_angle,
-            invite_used=pending_digest.invite_used,
-            opening_text=pending_digest.opening,
-            closing_text=pending_digest.closing,
-            event_count=len(events),
-        )
-
+    # 消息已经发出去了，不可撤回 —— 去重标记必须最先写。文案历史只是"下次别撞
+    # 句型"的辅助数据，它挂了不能反过来让去重丢失、导致同一天重复播报。
     if not force:
         storage.mark_reported(chat_id, today)
+
+    if pending_digest is not None:
+        try:
+            storage.record_digest(
+                target_date,
+                opening_angle=pending_digest.opening_angle,
+                closing_angle=pending_digest.closing_angle,
+                invite_used=pending_digest.invite_used,
+                opening_text=pending_digest.opening,
+                closing_text=pending_digest.closing,
+                event_count=len(events),
+            )
+        except Exception as exc:
+            log.error("文案历史写入失败（不影响已发出的播报）：%s", exc, exc_info=True)
     log.info(
         "播报完成：chat=%s 活动数=%d 文案=%s",
         chat_id, len(events),

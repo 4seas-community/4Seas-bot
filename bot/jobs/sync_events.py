@@ -26,8 +26,11 @@ _sync_lock = asyncio.Lock()
 
 async def sync_events(horizon_days: int | None = None) -> tuple[bool, str]:
     """执行一次导入。返回 (是否成功, 给人看的结果描述)。"""
+    # 撞车时等待而不是放弃。早期版本直接返回 False，调用方（每日播报）会把它
+    # 当成"没有数据"，于是在冷启动 + 定时播报同时发生时往群里发一条
+    # "Nothing scheduled tomorrow"。锁只持有一次同步的时长（数秒），等得起。
     if _sync_lock.locked():
-        return False, "A sync is already running — skipping this one"
+        log.info("a sync is in flight — waiting for it rather than reporting empty")
 
     async with _sync_lock:
         days = settings.sync_horizon_days if horizon_days is None else horizon_days

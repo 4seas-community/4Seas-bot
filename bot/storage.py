@@ -106,6 +106,11 @@ _MIGRATIONS = (
     ("content", "ALTER TABLE events ADD COLUMN content TEXT"),
 )
 
+# 详情接口才有的字段。列表接口拿不到，补齐失败时是 None ——
+# 这时必须沿用库里已有的值，否则一次详情接口抖动就会把已经补好的 venue/content
+# 擦成空，下次成功再填回来，数据和 updated_at 反复翻转，播报还会掉描述。
+_ENRICHED_FIELDS = ("venue_name", "content")
+
 # 参与 content_hash 的字段。participants（报名人数）故意排除 ——
 # 它每天都在变，算进去会让每次同步都判定为"内容变了"，updated_at 就失去意义了。
 _HASH_FIELDS = (
@@ -197,12 +202,25 @@ class Storage:
         self._conn.commit()
 
     def _migrate(self) -> None:
-        """补上后加的列。老库直接 ALTER，不重建、不丢数据。"""
+        """补上后加的列。老库直接 ALTER，不重建、不丢数据。
+
+        两个列不值得上 PRAGMA user_version 那一套版本化迁移框架，但"检查完到
+        执行之间被别人抢先"这个窗口是真实存在的（systemd 重启时新旧进程短暂
+        重叠）。ALTER 失败一次就会让 Storage 在 import 期抛异常、bot 起不来，
+        所以这里把 duplicate column 当成成功。
+        """
         have = {r["name"] for r in self._conn.execute("PRAGMA table_info(events)")}
         for column, ddl in _MIGRATIONS:
-            if column not in have:
+            if column in have:
+                continue
+            try:
                 self._conn.execute(ddl)
                 log.info("migrated events table: added column %s", column)
+            except sqlite3.OperationalError as exc:
+                if "duplicate column" in str(exc).lower():
+                    log.info("column %s already added by another process", column)
+                    continue
+                raise
 
     # ── 活动同步（幂等） ──────────────────────────────────────────────
     def upsert_events(
@@ -223,16 +241,26 @@ class Storage:
 
         with self._lock:
             existing = {
-                r["event_id"]: r["content_hash"]
+                r["event_id"]: r
                 for r in self._conn.execute(
-                    "SELECT event_id, content_hash FROM events WHERE source = ?", (source,)
+                    "SELECT event_id, content_hash, venue_name, content "
+                    "FROM events WHERE source = ?", (source,)
                 )
             }
 
             for ev in events:
+                prev = existing.get(ev.id)
+                if prev is not None:
+                    # 在算 hash 之前补回来。放到 SQL 里 COALESCE 也能保住数据，
+                    # 但 hash 会按 None 算，和实际存的行对不上，下次同步依然误判
+                    # "内容变了"。
+                    for field_name in _ENRICHED_FIELDS:
+                        if getattr(ev, field_name) is None and prev[field_name] is not None:
+                            setattr(ev, field_name, prev[field_name])
+
                 row = _event_to_row(ev, now_iso)
                 row["source"] = source
-                prev_hash = existing.get(row["event_id"])
+                prev_hash = prev["content_hash"] if prev is not None else None
                 if prev_hash is None:
                     result.inserted += 1
                 elif prev_hash != row["content_hash"]:

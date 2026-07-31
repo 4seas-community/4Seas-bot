@@ -115,15 +115,31 @@ def render_event(ev: Event, index: int | None = None) -> str:
     return "\n".join(lines)
 
 
-def fmt_span(ev: Event) -> str:
-    if ev.is_all_day:
-        return "All day"
+def fmt_span(ev: Event, target_date: dt.date | None = None) -> str:
+    """Time span as shown under a given day's heading.
+
+    `target_date` matters for multi-day events. A residency week that began on
+    Jul 28 and is still running tomorrow used to render as `09:00–Aug 3 18:00`
+    under tomorrow's heading — and 09:00 is Jul 28's start time, so readers take
+    it as "starts 9am tomorrow". Anything that began earlier is labelled as
+    already running instead of quoting a start time from another day.
+    """
     start = ev.local_start
     end = ev.local_end
+
+    if target_date is not None and start.date() < target_date:
+        if end is None:
+            return "Ongoing"
+        if end.date() > target_date:
+            return f"Ongoing · until {end:%b %-d}"
+        return f"Ongoing · until {end:%H:%M}"
+
+    if ev.is_all_day:
+        return "All day"
     if end is None:
         return f"{start:%H:%M}"
     if end.date() != start.date():
-        return f"{start:%H:%M}–{end:%b %-d %H:%M}"
+        return f"{start:%H:%M} → {end:%b %-d %H:%M}"
     return f"{start:%H:%M}–{end:%H:%M}"
 
 
@@ -131,6 +147,7 @@ def render_editorial(
     events: list[Event],
     *,
     target_date: dt.date,
+    today: dt.date | None = None,
     opening: str = "",
     lines: dict[str, str] | None = None,
     closing: str = "",
@@ -159,7 +176,12 @@ def render_editorial(
 
     if not events:
         # Explicitly "none found" — never quietly borrow another day's events.
-        body = opening or "No 4Seas events are listed for tomorrow."
+        # The label follows target_date; hardcoding "tomorrow" makes the message
+        # lie whenever DAILY_REPORT_OFFSET_DAYS is anything but 1.
+        label = day_label(target_date, today) if today else fmt_date(target_date)
+        # "today"/"tomorrow" read as adverbs; a date needs "on" and keeps its caps.
+        when = label.lower() if label in ("Today", "Tomorrow") else f"on {label}"
+        body = opening or f"No 4Seas events are listed {when}."
         return (
             f"{date_line}\n\n{esc(body)}\n\n"
             f'Details:\n<a href="{SOLA_URL}">{SOLA_URL}</a>'
@@ -170,7 +192,7 @@ def render_editorial(
         parts.append(esc(opening))
 
     for ev in events:
-        block = [f"{fmt_span(ev)}｜<b>{esc(_short_title(ev.title, TITLE_MAX_EDITORIAL))}</b>"]
+        block = [f"{fmt_span(ev, target_date)}｜<b>{esc(_short_title(ev.title, TITLE_MAX_EDITORIAL))}</b>"]
         venue = ev.venue_name or ev.place_title
         if venue:
             block.append(f"📍 {esc(venue)}")

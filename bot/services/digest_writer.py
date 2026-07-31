@@ -131,9 +131,9 @@ def choose_angles(
     recent_openings = {r["opening_angle"] for r in recent[:2]}
     recent_closings = {r["closing_angle"] for r in recent[:2]}
 
-    invite_due = (
-        days_since_invite is None or days_since_invite >= INVITE_MIN_GAP_DAYS
-    )
+    # None = 从没发过（全新部署）。首帖就劝人去办活动，正是"不要把推荐发起
+    # 活动当默认结尾"要避免的观感 —— 先让它围绕当天内容，之后自然轮到。
+    invite_due = days_since_invite is not None and days_since_invite >= INVITE_MIN_GAP_DAYS
     # Past the max gap it stops being optional, so the invitation doesn't quietly
     # disappear for weeks on end.
     invite_forced = days_since_invite is not None and days_since_invite >= INVITE_MAX_GAP_DAYS
@@ -309,20 +309,30 @@ class DigestWriter:
                     response_format={"type": "json_object"},
                 )
                 data = json.loads(resp.choices[0].message.content or "{}")
-            except Exception as exc:
-                log.warning("digest copy via %s failed: %s", provider.name, exc)
-                continue
 
-            opening = str(data.get("opening", "")).strip()
-            closing = str(data.get("closing", "")).strip()
-            if not opening or not closing:
-                log.warning("digest copy from %s missing opening/closing", provider.name)
+                # 形状校验必须留在 try 里。模型可能返回合法 JSON 但形状不对
+                # （顶层是 list、items 是数字），那些会抛 AttributeError /
+                # TypeError；漏在 try 外面就会直接掀掉整次播报，连下一个
+                # provider 和确定性降级都轮不上。
+                if not isinstance(data, dict):
+                    raise ValueError(f"top level is {type(data).__name__}, expected object")
+                opening = str(data.get("opening") or "").strip()
+                closing = str(data.get("closing") or "").strip()
+                if not opening or not closing:
+                    raise ValueError("missing opening/closing")
+                items = data.get("items")
+                if items is None:
+                    items = []
+                if not isinstance(items, list):
+                    raise ValueError(f"items is {type(items).__name__}, expected list")
+            except Exception as exc:
+                log.warning("digest copy via %s unusable: %s", provider.name, exc)
                 continue
 
             valid_ids = {e.id for e in events}
             written = {
-                str(i.get("id")): str(i.get("line", "")).strip()
-                for i in (data.get("items") or [])
+                str(i.get("id")): str(i.get("line") or "").strip()
+                for i in items
                 if isinstance(i, dict) and str(i.get("id")) in valid_ids
             }
             missing = valid_ids - written.keys()
