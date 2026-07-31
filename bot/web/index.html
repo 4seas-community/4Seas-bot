@@ -265,6 +265,20 @@ $('save').onclick = async () => {
   }
 };
 
+// Check the markup as soon as the author leaves the box, not after Save —
+// an unclosed tag makes Telegram reject the whole message at send time.
+$('f_reply').onblur = async () => {
+  const m = $('dlgMsg');
+  if ($('f_parse_mode').value !== 'HTML') { m.className = 'msg err'; return; }
+  try {
+    const r = await api('/api/check-html', {method:'POST', body: JSON.stringify({
+      reply: $('f_reply').value, parse_mode: $('f_parse_mode').value,
+    })});
+    if (r.problem) { m.textContent = `HTML: ${r.problem}`; m.className = 'msg err show'; }
+    else { m.className = 'msg err'; }
+  } catch (_) { /* validation is a convenience; saving still enforces it */ }
+};
+
 $('cancel').onclick = () => $('dlg').close();
 $('add').onclick = () => open(null);
 $('refresh').onclick = () => load();

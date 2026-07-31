@@ -30,6 +30,43 @@ RESERVED = frozenset(
 )
 
 VALID_NAME = re.compile(r"^[a-z0-9_]{1,32}$")
+
+# Telegram's HTML subset. Anything else is rejected by the API outright.
+TELEGRAM_TAGS = frozenset(
+    {"b", "strong", "i", "em", "u", "ins", "s", "strike", "del",
+     "a", "code", "pre", "span", "tg-spoiler", "blockquote"}
+)
+_TAG_RE = re.compile(r"<\s*(/?)\s*([a-zA-Z][a-zA-Z0-9-]*)[^>]*>")
+
+
+def check_telegram_html(text: str) -> str | None:
+    """Return a human-readable problem, or None if Telegram will accept this.
+
+    Telegram rejects the whole message on a single unclosed tag — and the failure
+    only surfaces when someone actually runs the command, in the group, silently.
+    Catching it at save time is the difference between "the form says no" and
+    "the bot is quietly broken for a week".
+    """
+    stack: list[str] = []
+    for closing, raw in _TAG_RE.findall(text):
+        tag = raw.lower()
+        if tag not in TELEGRAM_TAGS:
+            return (
+                f"<{tag}> is not supported by Telegram. Allowed: "
+                + ", ".join(f"<{t}>" for t in sorted(TELEGRAM_TAGS))
+            )
+        if closing:
+            if not stack:
+                return f"</{tag}> has no matching opening tag"
+            if stack[-1] != tag:
+                return f"</{tag}> closes out of order — <{stack[-1]}> is still open"
+            stack.pop()
+        else:
+            stack.append(tag)
+    if stack:
+        opened = ", ".join(f"<{t}>" for t in stack)
+        return f"unclosed tag: {opened} — add the matching closing tag"
+    return None
 VALID_SCOPES = frozenset({"all", "group", "private"})
 VALID_PARSE_MODES = frozenset({"HTML", "Markdown", "MarkdownV2", "none"})
 
@@ -105,6 +142,11 @@ def validate_entry(
     parse_mode = str(raw.get("parse_mode", "HTML"))
     if parse_mode not in VALID_PARSE_MODES:
         return None, f"{source}: `/{name}` has unknown parse_mode {parse_mode!r}"
+
+    if parse_mode == "HTML":
+        problem = check_telegram_html(reply)
+        if problem:
+            return None, f"{source}: `/{name}` reply has invalid HTML — {problem}"
 
     return (
         CustomCommand(

@@ -24,7 +24,7 @@ from aiohttp import web
 from ..config import settings
 from ..deps import custom_commands, kb, keyword_rules, storage
 from ..services.command_store import CommandStore, StoreError
-from ..services.custom_commands import RESERVED
+from ..services.custom_commands import RESERVED, check_telegram_html
 
 log = logging.getLogger(__name__)
 
@@ -122,6 +122,14 @@ class AdminServer:
             return web.json_response({"error": str(exc)}, status=400)
         return web.json_response({"ok": True, "applied": await self._apply()})
 
+    async def _check_html(self, request: web.Request) -> web.Response:
+        """Live syntax check for the reply box — the save path enforces the same
+        rule, but telling someone only after they hit Save is a poor trade."""
+        body = await request.json()
+        if str(body.get("parse_mode", "HTML")) != "HTML":
+            return web.json_response({"problem": None})
+        return web.json_response({"problem": check_telegram_html(str(body.get("reply", "")))})
+
     async def _reload(self, request: web.Request) -> web.Response:
         kb.load()
         keyword_rules.load()
@@ -158,6 +166,7 @@ class AdminServer:
             web.put("/api/commands/{name}", self._update),
             web.delete("/api/commands/{name}", self._delete),
             web.post("/api/commands/{name}/toggle", self._toggle),
+            web.post("/api/check-html", self._check_html),
             web.post("/api/reload", self._reload),
             web.get("/api/status", self._status),
         ])
