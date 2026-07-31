@@ -5,6 +5,7 @@
 #   ./start.sh              run in the foreground (Ctrl-C to stop)
 #   ./start.sh --bg         run in the background, logging to data/bot.log
 #   ./start.sh --stop       stop a background instance
+#   ./start.sh --restart    stop cleanly, then start (avoids a 409 overlap)
 #   ./start.sh --status     is it running, and what is it doing
 #
 # Telegram long polling allows exactly one consumer per token, so this refuses to
@@ -52,6 +53,26 @@ case "${1:-}" in
       green "stopped (pid $pid)"
     else
       dim "not running"
+    fi
+    exit 0
+    ;;
+  --restart)
+    # launchctl kickstart -k 会先起新进程、旧进程还在收尾，两者短暂重叠就撞
+    # Telegram 的单消费者限制（409 Conflict）。先停干净再起。
+    # 不要写成 `launchctl list | grep -q ...`：grep -q 一命中就关掉管道，
+    # launchctl 收到 SIGPIPE 非零退出，pipefail 会把整条管道判为失败，
+    # 于是这个分支永远进不去 —— 实测就是这样，结果起了第二个实例。
+    if launchctl list com.4seas.bot >/dev/null 2>&1; then
+      launchctl stop com.4seas.bot 2>/dev/null || true
+      for _ in $(seq 1 20); do
+        pgrep -f "$PWD/.venv/bin/python -m bot" >/dev/null 2>&1 || break
+        sleep 0.5
+      done
+      launchctl start com.4seas.bot
+      green "restarted via launchd (old instance drained first)"
+    else
+      "$0" --stop >/dev/null 2>&1 || true
+      exec "$0" --bg
     fi
     exit 0
     ;;

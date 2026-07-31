@@ -604,3 +604,107 @@ def test_report_name_is_free_for_custom_commands():
     """Now that the built-in is gone, an admin may define their own /report."""
     from bot.services.custom_commands import RESERVED
     assert "report" not in RESERVED
+
+
+# ── Transient errors must not drown the real ones ─────────────────────
+
+
+async def test_conflict_during_a_restart_is_not_alerted(monkeypatch):
+    """Restarting overlaps the old and new process for a moment, so Telegram kicks
+    one off getUpdates. Pushing a full traceback for that trains the admin to
+    ignore alerts — including the one that matters."""
+    from telegram.error import Conflict
+    from bot.handlers import errors
+
+    monkeypatch.setattr(errors, "_transient_streak", 0)
+    monkeypatch.setattr(errors, "_transient_last", 0.0)
+    monkeypatch.setattr(errors.settings, "telegram_admin_ids", "1")
+
+    sent = []
+
+    class Ctx:
+        error = Conflict("terminated by other getUpdates request")
+        class bot:
+            @staticmethod
+            async def send_message(*a, **kw):
+                sent.append(kw)
+
+    await errors.on_error(None, Ctx())
+    assert sent == [], "a single transient conflict must stay silent"
+
+
+async def test_a_persistent_conflict_does_alert(monkeypatch):
+    """Two instances actually running is a real problem and must surface."""
+    from telegram.error import Conflict
+    from bot.handlers import errors
+
+    monkeypatch.setattr(errors, "_transient_streak", 0)
+    monkeypatch.setattr(errors, "_transient_last", 0.0)
+    monkeypatch.setattr(errors.settings, "telegram_admin_ids", "1")
+    errors.settings.__dict__.pop("admin_ids", None)
+
+    sent = []
+
+    class Ctx:
+        error = Conflict("terminated by other getUpdates request")
+        class bot:
+            @staticmethod
+            async def send_message(*a, **kw):
+                sent.append(a)
+
+    for _ in range(errors.TRANSIENT_ALERT_AFTER):
+        await errors.on_error(None, Ctx())
+
+    assert len(sent) == 1, "should alert exactly once, on crossing the threshold"
+
+
+async def test_a_real_bug_alerts_immediately(monkeypatch):
+    """Only network-ish errors are debounced. A code bug must not be delayed."""
+    from bot.handlers import errors
+
+    monkeypatch.setattr(errors, "_transient_streak", 0)
+    monkeypatch.setattr(errors.settings, "telegram_admin_ids", "1")
+    errors.settings.__dict__.pop("admin_ids", None)
+
+    sent = []
+
+    class Ctx:
+        error = ValueError("a genuine bug")
+        class bot:
+            @staticmethod
+            async def send_message(*a, **kw):
+                sent.append(a)
+
+    await errors.on_error(None, Ctx())
+    assert len(sent) == 1
+
+
+def test_restart_helper_drains_before_starting():
+    """`launchctl kickstart -k` starts the new process while the old one is still
+    finishing — which is exactly what produced the 409 in the first place."""
+    script = (pathlib.Path(__file__).resolve().parent.parent / "start.sh").read_text()
+    assert "--restart" in script
+
+    block = script.split("--restart)")[1].split(";;")[0]
+    # Comments may name kickstart to explain why it is avoided; what matters is
+    # that no line actually runs it.
+    commands = [ln.strip() for ln in block.splitlines() if not ln.strip().startswith("#")]
+    assert not any("kickstart" in ln for ln in commands), "restart must not use kickstart"
+    assert any("launchctl stop" in ln for ln in commands)
+    assert any("launchctl start" in ln for ln in commands)
+
+
+def test_launchd_detection_survives_pipefail():
+    """`launchctl list | grep -q X` under `set -euo pipefail` always reports false:
+    grep -q closes the pipe on its first match, launchctl dies of SIGPIPE, and
+    pipefail fails the whole pipeline. The script then falls through to the
+    foreground path and starts a SECOND instance — which is the exact 409 this
+    restart helper exists to avoid."""
+    script = (pathlib.Path(__file__).resolve().parent.parent / "start.sh").read_text()
+    commands = [ln.strip() for ln in script.splitlines() if not ln.strip().startswith("#")]
+    piped_grep_q = [
+        ln for ln in commands
+        if "launchctl list" in ln and "|" in ln and "grep -q" in ln
+    ]
+    assert not piped_grep_q, f"SIGPIPE/pipefail trap: {piped_grep_q}"
+    assert any("launchctl list com.4seas.bot" in ln for ln in commands)
