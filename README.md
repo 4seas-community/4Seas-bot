@@ -47,8 +47,14 @@ git clone git@github.com:4seas-community/4Seas-bot.git
 cd 4Seas-bot
 uv venv --python 3.11 && uv pip install -e ".[dev]"
 cp .env.example .env         # 填 token,见下
-.venv/bin/python -m bot      # 长轮询启动
+./start.sh                   # 前台跑，Ctrl-C 停
+./start.sh --bg              # 后台跑，日志在 data/bot.log
+./start.sh --status          # 看状态
+./start.sh --stop            # 停
 ```
+
+`start.sh` 会先检查虚拟环境和 `.env`，并且**拒绝启动第二个实例** ——
+Telegram 长轮询同一 token 只允许一个消费者，两个进程会互抢 update。
 
 启动时会自动补一次活动导入，所以第一次跑完库里就有数据了。
 
@@ -161,7 +167,7 @@ BM25 是纯词面匹配，中文查询对不上英文正文，所以每条加一
 | 命令 | 谁能用 | 作用 |
 |---|---|---|
 | `/start` `/help` | 所有人 | 介绍和命令列表 |
-| `/events` | 所有人 | 查近期活动（默认今天起一周） |
+| `/events` | 所有人 | 看**明天**的活动（跟 19:00 自动播报同一个窗口）；`/events 3` 看更多天 |
 | `/ask <问题>` | 所有人 | 基于 FAQ 提问（有频率限制） |
 | `/faq` | 所有人 | 列出 FAQ 目录 |
 | `/sync` | 管理员 | 立刻从 Social Layer 导入一次活动（幂等，随便点） |
@@ -169,9 +175,11 @@ BM25 是纯词面匹配，中文查询对不上英文正文，所以每条加一
 | `/reload` | 管理员 | 重新加载 faq.md 和 keywords.yaml |
 | `/status` | 管理员 | 活动库存量、上次/下次同步、下次播报、问答用量 |
 
-`/events` 可以带参数：`/events 3` 看今天起 4 天。它**始终从今天算起**，
-跟每晚只播明天的自动预告不是一回事 —— 群里有人随手问「最近有啥」时，
-只回明天一天没什么用。
+`/events` 默认跟 19:00 的自动播报**共用同一个窗口**（`DAILY_REPORT_OFFSET_DAYS`
++ `DAILY_REPORT_DAYS_AHEAD`），不另设配置 —— 有人查了 `/events` 之后又看到
+19:00 播出来的是另一批活动，那会被当成 bug。
+
+`/events` 不调 LLM（任何人都能随手发，没有频率限制），推荐语直接取主办方原文。
 
 ---
 

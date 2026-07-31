@@ -222,3 +222,5 @@ data/bot.sqlite3
 data/*.sqlite3-journal
 data/*.sqlite3-wal
 data/*.sqlite3-shm
+data/bot.pid
+data/bot.log

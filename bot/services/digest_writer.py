@@ -279,6 +279,7 @@ class DigestWriter:
         recent: list,
         days_since_invite: int | None,
         rng: random.Random | None = None,
+        use_llm: bool = True,
     ) -> DigestCopy:
         opening_angle, closing_angle, invite_used = choose_angles(
             target_date, recent, days_since_invite, rng
@@ -287,6 +288,10 @@ class DigestWriter:
             opening_angle=opening_angle, closing_angle=closing_angle, invite_used=invite_used
         )
         copy.lines = {e.id: _fallback_line(e) for e in events}
+
+        if not use_llm:
+            # Caller wants the grounded fallback lines only — no billable call.
+            return copy
 
         if not events or not llm_service.providers:
             if not llm_service.providers:

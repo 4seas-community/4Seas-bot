@@ -6,6 +6,7 @@ these ships a wrong message to a 776-member group or stops the bot starting.
 
 import datetime as dt
 import json
+import pathlib
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -523,3 +524,45 @@ def test_welcome_falls_back_when_a_name_is_entirely_a_link():
     """Stripping can empty the name out — the greeting must still read as English."""
     from bot.render import strip_links
     assert (strip_links("https://evil.example/x") or "there") == "there"
+
+
+# ── /events must agree with the 19:00 digest ──────────────────────────
+
+
+def test_events_command_shares_the_digest_window():
+    """If /events showed a week while the 19:00 post shows tomorrow, people would
+    read the mismatch as a bug. They must come from the same two settings."""
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "bot" / "handlers" / "commands.py").read_text(encoding="utf-8")
+    body = src[src.index("async def cmd_events"):src.index("async def cmd_faq")]
+    assert "settings.daily_report_days_ahead" in body
+    assert "settings.daily_report_offset_days" in body
+    assert "events_command_days" not in body, "/events must not have its own window setting"
+
+
+async def test_events_command_makes_no_llm_call(monkeypatch):
+    """/events is unmetered — anyone in a 776-member group can spam it, so it must
+    never trigger a billable generation."""
+    from bot.services import digest_writer as dw
+
+    called = {"n": 0}
+
+    class Boom:
+        async def create(self, **kw):
+            called["n"] += 1
+            raise AssertionError("/events must not call the LLM")
+
+    fake = type("P", (), {
+        "name": "fake", "model": "m",
+        "client": type("C", (), {"chat": type("Ch", (), {"completions": Boom()})()})(),
+    })()
+    monkeypatch.setattr(dw.llm_service, "providers", [fake])
+
+    copy = await dw.digest_writer.write(
+        [ev(content="Bring a book and read quietly together for two hours.")],
+        target_date=dt.date(2026, 8, 1), recent=[], days_since_invite=None,
+        use_llm=False,
+    )
+    assert called["n"] == 0
+    assert copy.generated is False
+    assert copy.lines["e1"], "still grounded in the organiser's own words"
