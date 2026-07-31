@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 from functools import cached_property
 from zoneinfo import ZoneInfo
 
@@ -19,8 +20,12 @@ def _parse_ids(raw: str) -> list[int]:
 
 
 class Settings(BaseSettings):
+    # BOT_SETTINGS_ENV_FILE 让测试把 .env 关掉（设为空串）。不这样的话，本机有
+    # .env、CI 没有，同一套测试在两边跑的是不同配置。
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        env_file=os.environ.get("BOT_SETTINGS_ENV_FILE", ".env") or None,
+        env_file_encoding="utf-8",
+        extra="ignore",
     )
 
     # Telegram
