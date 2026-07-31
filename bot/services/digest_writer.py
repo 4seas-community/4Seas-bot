@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 
 from ..config import settings
 from ..models import Event
+from ..render import strip_links
 from .llm import llm_service
 
 log = logging.getLogger(__name__)
@@ -176,30 +177,6 @@ def _event_brief(ev: Event) -> dict:
         "description": content[:900],
         "tags": ev.tags[:5],
     }
-
-
-# Telegram auto-links bare URLs and @handles in plain text, so HTML escaping is
-# not enough — an injected link still renders as a tappable link for 776 people.
-# The digest carries exactly one link, appended by the renderer, so any link in
-# generated or organiser-supplied prose is either injected or redundant. Drop it.
-_LINKISH = re.compile(
-    r"""(?xi)
-      \b(?:https?|ftp)://\S+          # scheme URLs
-    | \bwww\.\S+                     # www.…
-    | \b(?:t\.me|telegram\.me)/\S+  # telegram deep links
-    | (?<![\w@])@[A-Za-z0-9_]{4,}      # @handles (auto-linked by Telegram)
-    | \b[\w.-]+\.(?:com|net|org|io|xyz|app|link|me|co|day|finance)\b(?:/\S*)?
-    """
-)
-
-
-def strip_links(text: str) -> str:
-    """Remove anything Telegram would turn into a tappable link."""
-    cleaned = _LINKISH.sub("", text)
-    # Tidy the punctuation left behind by the removal.
-    cleaned = re.sub(r"\s+([,.;:!?])", r"\1", cleaned)
-    cleaned = re.sub(r"\(\s*\)|\[\s*\]", "", cleaned)
-    return " ".join(cleaned.split())
 
 
 def _cap(text: str, limit: int) -> str:

@@ -15,7 +15,7 @@ from telegram.constants import ParseMode
 from telegram.ext import ApplicationHandlerStop, ContextTypes
 
 from ..deps import keyword_rules, settings, storage
-from ..render import esc
+from ..render import esc, strip_links
 from .commands import answer_question
 
 log = logging.getLogger(__name__)
@@ -32,7 +32,10 @@ async def on_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not members:
         return
     log.info("新成员入群 | chat=%s 人数=%d", msg.chat_id, len(members))
-    names = ", ".join(esc(m.full_name) for m in members[:5])
+    # 显示名是用户自己填的。escaping 只挡 HTML 标签，Telegram 仍会把裸域和
+    # @handle 自动变成可点链接 —— 改个名进群，bot 就替你把钓鱼链接播给全群，
+    # 而且是以管理员身份发的，可信度更高。和活动内容那条是同一类问题。
+    names = ", ".join(esc(strip_links(m.full_name) or "there") for m in members[:5])
     if len(members) > 5:
         names += f" and {len(members) - 5} more"
     await msg.reply_text(

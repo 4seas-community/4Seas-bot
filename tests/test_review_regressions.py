@@ -432,7 +432,7 @@ def test_upsert_does_not_mutate_the_caller_s_events(store):
     ("Go to Free-Money.finance now", "Free-Money.finance"),
 ])
 def test_links_are_stripped_from_generated_prose(evil, gone):
-    from bot.services.digest_writer import strip_links
+    from bot.render import strip_links
     assert gone.lower() not in strip_links(evil).lower()
 
 
@@ -444,7 +444,7 @@ def test_links_are_stripped_from_generated_prose(evil, gone):
 ])
 def test_ordinary_copy_survives_link_stripping(legit):
     """Over-eager filtering would quietly mangle every normal recommendation."""
-    from bot.services.digest_writer import strip_links
+    from bot.render import strip_links
     assert strip_links(legit) == legit
 
 
@@ -496,3 +496,30 @@ async def test_end_to_end_injection_does_not_reach_the_rendered_digest(monkeypat
     assert "@evilbot_official" not in out
     # the one legitimate link is still there
     assert "app.sola.day/event/4seas" in out
+
+
+@pytest.mark.parametrize("display_name,gone", [
+    ("Free USDT claim at evil.link/x", "evil.link"),
+    ("Airdrop https://phish.example/go", "phish.example"),
+    ("DM @scam_support_bot", "@scam_support_bot"),
+])
+def test_welcome_message_strips_links_from_display_names(display_name, gone):
+    """Second entry point for the same class of attack: change your display name,
+    join, and the bot broadcasts your link to 776 people — as an admin."""
+    from bot.render import esc, strip_links
+    from bot.handlers.interactions import WELCOME
+
+    rendered = WELCOME.format(names=esc(strip_links(display_name) or "there"))
+    assert gone.lower() not in rendered.lower()
+
+
+def test_welcome_still_greets_an_ordinary_name():
+    from bot.render import esc, strip_links
+    from bot.handlers.interactions import WELCOME
+    assert "Jason Jiao" in WELCOME.format(names=esc(strip_links("Jason Jiao") or "there"))
+
+
+def test_welcome_falls_back_when_a_name_is_entirely_a_link():
+    """Stripping can empty the name out — the greeting must still read as English."""
+    from bot.render import strip_links
+    assert (strip_links("https://evil.example/x") or "there") == "there"
