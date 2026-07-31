@@ -47,16 +47,18 @@ def day_label(day: dt.date, today: dt.date) -> str:
     return fmt_date(day)
 
 
-TITLE_MAX = 58
+TITLE_MAX = 58        # compact 单行用
+TITLE_MAX_EDITORIAL = 120  # editorial 独占一行，砍标题只会丢信息
 
 
-def _short_title(title: str) -> str:
+def _short_title(title: str, limit: int = TITLE_MAX) -> str:
     """Sola titles run long ('Language Corner  Sa-Wat-Dee Thai Learn Basic Thai
-    Together'). One long title wrapping to three lines ruins a compact list."""
+    Together'). One long title wrapping to three lines ruins a compact list —
+    but in the editorial layout the title owns its line, so barely trim it."""
     clean = " ".join(title.split())
-    if len(clean) <= TITLE_MAX:
+    if len(clean) <= limit:
         return clean
-    return clean[: TITLE_MAX - 1].rstrip() + "…"
+    return clean[: limit - 1].rstrip() + "…"
 
 
 def render_event_line(ev: Event) -> str:
@@ -111,6 +113,77 @@ def render_event(ev: Event, index: int | None = None) -> str:
         lines.append(f'🔗 <a href="{esc(ev.url)}">Details / RSVP</a>')
 
     return "\n".join(lines)
+
+
+def fmt_span(ev: Event) -> str:
+    if ev.is_all_day:
+        return "All day"
+    start = ev.local_start
+    end = ev.local_end
+    if end is None:
+        return f"{start:%H:%M}"
+    if end.date() != start.date():
+        return f"{start:%H:%M}–{end:%b %-d %H:%M}"
+    return f"{start:%H:%M}–{end:%H:%M}"
+
+
+def render_editorial(
+    events: list[Event],
+    *,
+    target_date: dt.date,
+    opening: str = "",
+    lines: dict[str, str] | None = None,
+    closing: str = "",
+) -> str:
+    """The community-post layout.
+
+        {opening}
+
+        11:00–13:00｜Language & Culture Exchange
+        📍 Event Space, 1st Floor, 4Seas Nimman
+        {one-line recommendation}
+
+        ...
+
+        {closing}
+
+        Details:
+        https://app.sola.day/event/4seas
+
+    One link at the end, not one per event — a link on every line reads as noise.
+    Venue and recommendation lines are omitted entirely when the data isn't there,
+    rather than printed empty or padded with filler.
+    """
+    lines = lines or {}
+    date_line = f"<b>{target_date.strftime('%A, %-d %B')}</b>"
+
+    if not events:
+        # Explicitly "none found" — never quietly borrow another day's events.
+        body = opening or "No 4Seas events are listed for tomorrow."
+        return (
+            f"{date_line}\n\n{esc(body)}\n\n"
+            f'Details:\n<a href="{SOLA_URL}">{SOLA_URL}</a>'
+        )
+
+    parts: list[str] = [date_line]
+    if opening:
+        parts.append(esc(opening))
+
+    for ev in events:
+        block = [f"{fmt_span(ev)}｜<b>{esc(_short_title(ev.title, TITLE_MAX_EDITORIAL))}</b>"]
+        venue = ev.venue_name or ev.place_title
+        if venue:
+            block.append(f"📍 {esc(venue)}")
+        rec = (lines.get(ev.id) or "").strip()
+        if rec:
+            block.append(esc(rec))
+        parts.append("\n".join(block))
+
+    if closing:
+        parts.append(esc(closing))
+    parts.append(f'Details:\n<a href="{SOLA_URL}">{SOLA_URL}</a>')
+
+    return _truncate("\n\n".join(parts))
 
 
 def render_daily_report(

@@ -13,12 +13,15 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import logging
 import sqlite3
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 
 from .models import Event
+
+log = logging.getLogger(__name__)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -30,6 +33,8 @@ CREATE TABLE IF NOT EXISTS events (
     tz               TEXT    NOT NULL,
     place_title      TEXT,
     place_address    TEXT,
+    venue_name       TEXT,
+    content          TEXT,
     host             TEXT,
     participants     INTEGER,
     max_participants INTEGER,
@@ -61,6 +66,21 @@ CREATE TABLE IF NOT EXISTS sync_log (
     error      TEXT
 );
 
+-- 文案历史。用来做「不能和前几天撞句型」和「邀请语 4-6 天才出现一次」的约束，
+-- 没有它 LLM 每天都会滑回同一个模板。
+CREATE TABLE IF NOT EXISTS digest_log (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_date    TEXT NOT NULL,
+    written_at     TEXT NOT NULL,
+    opening_angle  TEXT NOT NULL,
+    closing_angle  TEXT NOT NULL,
+    invite_used    INTEGER NOT NULL DEFAULT 0,
+    opening_text   TEXT NOT NULL DEFAULT '',
+    closing_text   TEXT NOT NULL DEFAULT '',
+    event_count    INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_digest_date ON digest_log (target_date);
+
 CREATE TABLE IF NOT EXISTS report_log (
     chat_id     INTEGER NOT NULL,
     report_date TEXT    NOT NULL,
@@ -80,10 +100,17 @@ CREATE TABLE IF NOT EXISTS ask_usage (
 CREATE INDEX IF NOT EXISTS idx_ask_usage ON ask_usage (user_id, asked_at);
 """
 
+# 后加的列。SQLite 只支持 ADD COLUMN，逐个补即可，不需要重建表。
+_MIGRATIONS = (
+    ("venue_name", "ALTER TABLE events ADD COLUMN venue_name TEXT"),
+    ("content", "ALTER TABLE events ADD COLUMN content TEXT"),
+)
+
 # 参与 content_hash 的字段。participants（报名人数）故意排除 ——
 # 它每天都在变，算进去会让每次同步都判定为"内容变了"，updated_at 就失去意义了。
 _HASH_FIELDS = (
     "title", "start_ts", "end_ts", "tz", "place_title", "place_address",
+    "venue_name", "content",
     "host", "max_participants", "tags", "meeting_url", "notes",
     "require_approval", "url",
 )
@@ -114,6 +141,8 @@ def _event_to_row(ev: Event, now_iso: str) -> dict:
         "tz": ev.tz,
         "place_title": ev.place_title,
         "place_address": ev.place_address,
+        "venue_name": ev.venue_name,
+        "content": ev.content,
         "host": ev.host,
         "participants": ev.participants,
         "max_participants": ev.max_participants,
@@ -140,6 +169,8 @@ def _row_to_event(row: sqlite3.Row) -> Event:
         tz=row["tz"],
         place_title=row["place_title"],
         place_address=row["place_address"],
+        venue_name=row["venue_name"],
+        content=row["content"],
         host=row["host"],
         participants=row["participants"],
         max_participants=row["max_participants"],
@@ -162,7 +193,16 @@ class Storage:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(SCHEMA)
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        """补上后加的列。老库直接 ALTER，不重建、不丢数据。"""
+        have = {r["name"] for r in self._conn.execute("PRAGMA table_info(events)")}
+        for column, ddl in _MIGRATIONS:
+            if column not in have:
+                self._conn.execute(ddl)
+                log.info("migrated events table: added column %s", column)
 
     # ── 活动同步（幂等） ──────────────────────────────────────────────
     def upsert_events(
@@ -204,12 +244,14 @@ class Storage:
                     """
                     INSERT INTO events (
                         source, event_id, title, start_ts, end_ts, tz,
-                        place_title, place_address, host, participants, max_participants,
+                        place_title, place_address, venue_name, content,
+                        host, participants, max_participants,
                         tags, meeting_url, notes, require_approval, url,
                         content_hash, first_seen_at, updated_at, last_seen_at, deleted_at
                     ) VALUES (
                         :source, :event_id, :title, :start_ts, :end_ts, :tz,
-                        :place_title, :place_address, :host, :participants, :max_participants,
+                        :place_title, :place_address, :venue_name, :content,
+                        :host, :participants, :max_participants,
                         :tags, :meeting_url, :notes, :require_approval, :url,
                         :content_hash, :first_seen_at, :updated_at, :last_seen_at, NULL
                     )
@@ -220,6 +262,8 @@ class Storage:
                         tz               = excluded.tz,
                         place_title      = excluded.place_title,
                         place_address    = excluded.place_address,
+                        venue_name       = excluded.venue_name,
+                        content          = excluded.content,
                         host             = excluded.host,
                         participants     = excluded.participants,
                         max_participants = excluded.max_participants,
@@ -253,6 +297,46 @@ class Storage:
 
             self._conn.commit()
         return result
+
+    # ── 文案历史 ──────────────────────────────────────────────────────
+    def record_digest(
+        self, target_date: dt.date, *, opening_angle: str, closing_angle: str,
+        invite_used: bool, opening_text: str, closing_text: str, event_count: int,
+    ) -> None:
+        """按 target_date 幂等 —— 管理员连按几次 /report 预览时，不该每按一次
+        就烧掉一个「这个角度用过了」的名额，更不该把邀请语的 4-6 天计数打乱。"""
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM digest_log WHERE target_date = ?", (target_date.isoformat(),)
+            )
+            self._conn.execute(
+                "INSERT INTO digest_log (target_date, written_at, opening_angle, closing_angle, "
+                "invite_used, opening_text, closing_text, event_count) VALUES (?,?,?,?,?,?,?,?)",
+                (target_date.isoformat(), dt.datetime.now(dt.UTC).isoformat(),
+                 opening_angle, closing_angle, int(invite_used),
+                 opening_text[:400], closing_text[:400], event_count),
+            )
+            self._conn.commit()
+
+    def recent_digests(self, limit: int = 5) -> list[sqlite3.Row]:
+        with self._lock:
+            return list(self._conn.execute(
+                "SELECT * FROM digest_log ORDER BY id DESC LIMIT ?", (limit,)
+            ))
+
+    def days_since_invite(self, today: dt.date) -> int | None:
+        """距上次用「也欢迎你自己发起活动」那句过了几天。None = 从没用过。"""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT target_date FROM digest_log WHERE invite_used = 1 "
+                "ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            return (today - dt.date.fromisoformat(row["target_date"])).days
+        except ValueError:
+            return None
 
     def log_sync(self, source: str, result: SyncResult, ok: bool, error: str | None = None) -> None:
         with self._lock:

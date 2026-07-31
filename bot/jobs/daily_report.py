@@ -10,7 +10,8 @@ from telegram.ext import ContextTypes
 
 from ..deps import settings, storage
 from ..models import Event
-from ..render import render_daily_report
+from ..render import render_daily_report, render_editorial
+from ..services.digest_writer import digest_writer
 from ..services.events import day_window
 from .sync_events import sync_events
 
@@ -64,15 +65,36 @@ async def send_daily_report(
             storage.mark_reported(chat_id, today)
         return "No events for the target day — staying silent per config"
 
-    last = storage.last_sync()
-    text = render_daily_report(
-        events,
-        days_ahead=days,
-        today=today,
-        offset_days=offset,
-        source=last["source"] if last else None,
-        style=settings.digest_style,
-    )
+    target_date = today + dt.timedelta(days=offset)
+
+    if settings.digest_style == "editorial":
+        copy = await digest_writer.write(
+            events,
+            target_date=target_date,
+            recent=storage.recent_digests(5),
+            days_since_invite=storage.days_since_invite(target_date),
+        )
+        text = render_editorial(
+            events,
+            target_date=target_date,
+            opening=copy.opening,
+            lines=copy.lines,
+            closing=copy.closing,
+        )
+        # 记在发送成功之后 —— 发失败还占掉一个"今天用过 X 角度"的名额，
+        # 会让明天白白避开一个其实没出现过的句型。
+        pending_digest = copy
+    else:
+        last = storage.last_sync()
+        pending_digest = None
+        text = render_daily_report(
+            events,
+            days_ahead=days,
+            today=today,
+            offset_days=offset,
+            source=last["source"] if last else None,
+            style=settings.digest_style,
+        )
     await context.bot.send_message(
         chat_id=chat_id,
         text=text,
@@ -80,9 +102,24 @@ async def send_daily_report(
         disable_web_page_preview=True,
     )
 
+    if pending_digest is not None:
+        storage.record_digest(
+            target_date,
+            opening_angle=pending_digest.opening_angle,
+            closing_angle=pending_digest.closing_angle,
+            invite_used=pending_digest.invite_used,
+            opening_text=pending_digest.opening,
+            closing_text=pending_digest.closing,
+            event_count=len(events),
+        )
+
     if not force:
         storage.mark_reported(chat_id, today)
-    log.info("播报完成：chat=%s 活动数=%d", chat_id, len(events))
+    log.info(
+        "播报完成：chat=%s 活动数=%d 文案=%s",
+        chat_id, len(events),
+        "LLM" if (pending_digest and pending_digest.generated) else "fallback/静态",
+    )
     return f"Posted {len(events)} event(s)"
 
 

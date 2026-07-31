@@ -20,6 +20,9 @@ class Event:
 
     place_title: str | None = None
     place_address: str | None = None
+    # 只有详情接口才有的两个字段，列表接口拿不到：
+    venue_name: str | None = None   # "Event Space - 1st Floor 4Seas Nimman"
+    content: str | None = None      # 主办方写的完整介绍
     host: str | None = None
     participants: int | None = None
     max_participants: int | None = None

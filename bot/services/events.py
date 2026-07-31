@@ -7,6 +7,7 @@ packages/sola-sdk 源码里读出来的，契约随时可能变 —— 所以这
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import logging
 from pathlib import Path
@@ -72,6 +73,7 @@ class SolaApiSource(EventSource):
         if start is None:
             return None
         place = raw.get("place") or {}
+        venue = raw.get("venue") or {}
         owner = raw.get("owner") or {}
         eid = str(raw.get("id") or "")
         return Event(
@@ -80,7 +82,9 @@ class SolaApiSource(EventSource):
             start=start,
             end=_parse_iso(raw.get("end_time")),
             tz=raw.get("timezone") or settings.tz,
-            place_title=(place.get("title") or None),
+            place_title=(place.get("title") or place.get("name") or None),
+            venue_name=(venue.get("name") or place.get("name") or None),
+            content=(raw.get("content") or None),
             place_address=(place.get("address") or raw.get("location") or None),
             host=(owner.get("nickname") or owner.get("name") or None),
             participants=raw.get("participant_count"),
@@ -125,7 +129,50 @@ class SolaApiSource(EventSource):
 
         if not events:
             raise RuntimeError("Sola API 返回 0 条事件")
+
+        await self._enrich(events, window_start)
         return events
+
+    async def _enrich(self, events: list[Event], window_start: dt.datetime) -> None:
+        """用详情接口补齐 venue 和 content —— 列表接口没有这两个字段。
+
+        只补近期的。一次同步拉 60 天约 80 场，全补就是 80 个请求，而播报和
+        /events 只用得到最近一周多。补不到就退回列表数据，不算失败。
+        """
+        cutoff = window_start + dt.timedelta(days=settings.detail_enrich_days)
+        targets = [e for e in events if e.start <= cutoff]
+        if not targets:
+            return
+
+        sem = asyncio.Semaphore(settings.detail_concurrency)
+        base = f"{settings.sola_api_base}/api/v1/events"
+        filled = 0
+
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+            async def one(ev: Event) -> None:
+                nonlocal filled
+                async with sem:
+                    try:
+                        resp = await client.get(f"{base}/{ev.id}")
+                        resp.raise_for_status()
+                        body = resp.json()
+                    except Exception as exc:
+                        log.debug("详情补齐失败 %s：%s", ev.id, exc)
+                        return
+                raw = body.get("data") if isinstance(body, dict) and "data" in body else body
+                if not isinstance(raw, dict):
+                    return
+                venue = raw.get("venue") or {}
+                place = raw.get("place") or {}
+                ev.venue_name = venue.get("name") or place.get("name") or ev.venue_name
+                ev.content = (raw.get("content") or "").strip() or ev.content
+                if not ev.place_address:
+                    ev.place_address = place.get("address") or None
+                filled += 1
+
+            await asyncio.gather(*(one(e) for e in targets))
+
+        log.info("详情补齐：%d/%d 场（未来 %d 天）", filled, len(targets), settings.detail_enrich_days)
 
 
 class SolaIcsSource(EventSource):
