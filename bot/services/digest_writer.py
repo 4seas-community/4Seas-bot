@@ -94,30 +94,67 @@ line from the title alone. Never invent a detail: no made-up speakers, prices,
 levels, capacity, or requirements. If you are unsure, say less.
 
 OPENING
-The date is already printed above your opening — do not restate it. "Saturday,
-August 1: ..." wastes the one line you get. Go straight to the day's substance.
-You may lead with a single emoji that fits the day's theme (🗣️ 📚 🎧 🌿 …). One, not three.
+Name the day (e.g. "Saturday") inside the sentence — there is no separate date
+line above you. Find the tension or pairing in the day's line-up and put it in one
+sentence. Parallel structure works well: "One Saturday, two ways to build: a better
+city—or a better plate." Do not open with "Tuesday at 4Seas" or "A full day for…".
+End the line with one or two emoji that match the day's themes.
 
-LENGTH — hard limits, not suggestions
-Opening: one sentence, at most 25 words.
-Each recommendation: ONE sentence, at most 28 words. Not a summary of the whole
-description — one reason someone would walk into that room. Cut ruthlessly.
-Closing: one sentence, at most 20 words.
+RECOMMENDATIONS — be specific, not descriptive
+The single biggest failure is a line that could describe any event.
+
+Before writing each line, scan that event's description for these, in order:
+  1. prize money / cash amount
+  2. capacity or number of spots
+  3. cost, fee, or "free"
+  4. a deadline, or "first come, first served"
+  5. what you physically make or walk away with
+The "key_facts" field of each event holds exactly these sentences, lifted out of
+the description so truncation cannot hide them. Read it first.
+If ANY of these appear in the description, at least one MUST appear in your line.
+A hackathon with a stated prize pool and no mention of it is a failed line.
+"…and pitch your solution—with a THB 25,000 prize pool" beats
+"…collaborate in teams, build prototypes, and present to judges".
+
+Use only numbers and claims written in that event's own description. Never round,
+convert, estimate, or carry a number over from another event.
+
+SUBTITLE
+If the description carries a tagline the title omits (e.g. "Eat Smart · Lose Fat ·
+Keep Energy"), return it as "subtitle" and it will be appended to the title. Leave
+it out if there isn't one — do not invent a strapline.
+
+VENUE
+If a venue is given in the payload, leave "venue" empty; it is already known.
+If it is empty BUT the description says where or how the location is given (e.g.
+"address shared upon registration"), return that as "venue" in a few words, e.g.
+"Venue shared after registration". If the description says nothing about location,
+leave it empty — an omitted line is better than a guess.
+
+CLOSING
+Echo the opening rather than starting a new thought: if the opening paired two
+things, the closing should call back to that pairing ("Bring an idea—or an
+appetite. Saturday has room for both."). One emoji at the end.
 
 OUTPUT
 Return JSON only, no prose around it:
 {
   "opening": "...",
-  "items": [{"id": "<event id>", "line": "..."}],
+  "items": [
+    {"id": "<event id>", "subtitle": "", "venue": "", "line": "..."}
+  ],
   "closing": "..."
 }
-Include exactly one item per event given, with matching ids, in the order given."""
+Include exactly one item per event given, with matching ids, in the order given.
+"subtitle" and "venue" may be empty strings."""
 
 
 @dataclass(slots=True)
 class DigestCopy:
     opening: str = ""
     lines: dict[str, str] = field(default_factory=dict)
+    subtitles: dict[str, str] = field(default_factory=dict)
+    venues: dict[str, str] = field(default_factory=dict)
     closing: str = ""
     opening_angle: str = ""
     closing_angle: str = ""
@@ -163,6 +200,35 @@ def choose_angles(
     return opening_angle, closing_angle, invite_used
 
 
+# Sentences carrying the facts that make a line worth reading. Organisers bury
+# these deep — the hackathon's "Total Prize Pool: THB 25,000" sits at character
+# 1727 of a 2722-character description, well past any sane truncation point.
+# Truncating alone silently drops exactly the details we ask the model to lead with.
+_SALIENT = re.compile(
+    r"""(?ix)
+      prize | award | \bTHB\b | \bUSD\b | \bbaht\b | \b\d+\s*(?:฿|baht)\b
+    | capacity | \bspots?\b | \bseats?\b | limited\s+to | \bonly\s+\d+
+    | free\s+of\s+charge | \bfree\b | \bfee\b | \bcost\b | \bprice\b | pay\s+for
+    | first\s+come | deadline | register | rsvp | sign\s*up
+    | bring\s+(?:your|a) | you.ll\s+(?:leave|walk|get|make) | provided
+    """
+)
+
+
+def salient_facts(text: str, limit: int = 500) -> str:
+    """Pull out the sentences a reader actually decides on."""
+    picked, size = [], 0
+    for sentence in re.split(r"(?<=[.!?。])\s+|\n", text):
+        sentence = sentence.strip()
+        if not (12 <= len(sentence) <= 200) or not _SALIENT.search(sentence):
+            continue
+        if size + len(sentence) > limit:
+            break
+        picked.append(sentence)
+        size += len(sentence)
+    return " ".join(picked)
+
+
 def _event_brief(ev: Event) -> dict:
     """What the model is allowed to see. Anything not in here cannot be written about."""
     content = clean_content(ev.content)
@@ -175,6 +241,9 @@ def _event_brief(ev: Event) -> dict:
         ),
         "venue": ev.venue_name or ev.place_title or "",
         "description": content[:900],
+        # Surfaced separately so truncation cannot bury them, and so the model
+        # sees them as the decision-relevant bits rather than more prose.
+        "key_facts": salient_facts(content),
         "tags": ev.tags[:5],
     }
 
@@ -347,11 +416,11 @@ class DigestWriter:
                 continue
 
             valid_ids = {e.id for e in events}
-            written = {
-                str(i.get("id")): str(i.get("line") or "").strip()
-                for i in items
+            by_id = {
+                str(i.get("id")): i for i in items
                 if isinstance(i, dict) and str(i.get("id")) in valid_ids
             }
+            written = {k: str(v.get("line") or "").strip() for k, v in by_id.items()}
             missing = valid_ids - written.keys()
             if missing:
                 # Partial output is still useful — keep the fallback line for the rest
@@ -361,7 +430,18 @@ class DigestWriter:
             copy.opening = _cap(strip_links(opening), 220)
             copy.closing = _cap(strip_links(closing), 180)
             copy.lines = {
-                e.id: _cap(strip_links(written.get(e.id) or copy.lines.get(e.id, "")), 240)
+                e.id: _cap(strip_links(written.get(e.id) or copy.lines.get(e.id, "")), 260)
+                for e in events
+            }
+            copy.subtitles = {
+                e.id: _cap(strip_links(str((by_id.get(e.id) or {}).get("subtitle") or "")), 90)
+                for e in events
+            }
+            # 结构化的 venue 永远优先 —— 模型给的那个是从描述里读出来的，
+            # 只在我们确实没有场地字段时才用。
+            copy.venues = {
+                e.id: "" if (e.venue_name or e.place_title)
+                else _cap(strip_links(str((by_id.get(e.id) or {}).get("venue") or "")), 80)
                 for e in events
             }
             copy.generated = True
