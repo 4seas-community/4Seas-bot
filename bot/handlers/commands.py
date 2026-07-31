@@ -13,6 +13,7 @@ from telegram.ext import ContextTypes
 from ..deps import custom_commands, kb, keyword_rules, llm_service, settings, storage
 from ..jobs.daily_report import load_events, send_daily_report
 from ..jobs.sync_events import sync_events
+from ..services.digest_writer import digest_writer
 from ..render import SOLA_URL, esc, render_daily_report, render_editorial
 
 log = logging.getLogger(__name__)
@@ -116,7 +117,6 @@ async def cmd_events(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         # Single day → same editorial layout as the 19:00 post, but without an LLM
         # call: /events is unmetered and anyone in the group can spam it. The
         # organisers' own descriptions carry the recommendation lines.
-        from ..services.digest_writer import digest_writer
         copy = await digest_writer.write(
             events, target_date=today + dt.timedelta(days=offset),
             recent=[], days_since_invite=None, use_llm=False,

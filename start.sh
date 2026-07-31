@@ -26,9 +26,23 @@ running_pid() {
   # A stale pidfile after a crash would otherwise block every future start.
   [ -f "$PIDFILE" ] || return 1
   local pid; pid=$(cat "$PIDFILE" 2>/dev/null || true)
-  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && { echo "$pid"; return 0; }
-  rm -f "$PIDFILE"
-  return 1
+  [ -n "$pid" ] || { rm -f "$PIDFILE"; return 1; }
+  kill -0 "$pid" 2>/dev/null || { rm -f "$PIDFILE"; return 1; }
+
+  # PIDs get recycled. Without this check, a stale pidfile whose number has been
+  # handed to some unrelated process means `--stop` kills that process instead.
+  case "$(ps -p "$pid" -o command= 2>/dev/null || true)" in
+    *"-m bot"*) echo "$pid"; return 0 ;;
+    *) rm -f "$PIDFILE"; return 1 ;;
+  esac
+}
+
+rotate_log() {
+  # launchd and --bg both append; a week of running would otherwise grow without
+  # bound. One generation back is enough to debug a crash.
+  [ -f "$LOG" ] || return 0
+  local size; size=$(wc -c < "$LOG" 2>/dev/null || echo 0)
+  [ "$size" -gt 10485760 ] && mv "$LOG" "$LOG.1" || true
 }
 
 case "${1:-}" in
@@ -78,16 +92,22 @@ mkdir -p data
 
 # ── run ───────────────────────────────────────────────────────────────
 if [ "${1:-}" = "--bg" ]; then
+  rotate_log
+  # Remember where this run's output starts. The log is appended to, and when
+  # WEB_TOKEN is unset the admin token is regenerated per run — grepping the
+  # whole file would hand back a link from a previous run that no longer works.
+  mark=0; [ -f "$LOG" ] && mark=$(wc -c < "$LOG")
+
   nohup "$PY" -m bot >> "$LOG" 2>&1 &
   echo $! > "$PIDFILE"
-  sleep 3
+  sleep 4
   if pid=$(running_pid); then
     green "started in the background (pid $pid)"
     dim "  log: tail -f $LOG"
-    grep -a "Admin UI on" "$LOG" | tail -1 || true
+    tail -c "+$((mark + 1))" "$LOG" | grep -a "Admin UI on" | tail -1 || true
   else
-    red "died on startup — last lines:"
-    tail -20 "$LOG"
+    red "died on startup — this run's output:"
+    tail -c "+$((mark + 1))" "$LOG" | tail -20
     exit 1
   fi
 else
