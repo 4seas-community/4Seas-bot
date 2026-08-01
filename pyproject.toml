@@ -32,6 +32,7 @@ packages = ["bot"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "bot/web/index.html" = "bot/web/index.html"
+"bot/web/login.html" = "bot/web/login.html"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

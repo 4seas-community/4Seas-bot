@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>4Seas Bot — 登录</title>
+<style>
+  :root {
+    --bg:#f7f7f5; --panel:#fff; --line:#e3e3df; --text:#1c1c1a; --dim:#6b6b66;
+    --accent:#2f6f4f; --danger:#a8322a; --danger-soft:#fbeae8; --radius:10px;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{ --bg:#16171a; --panel:#1f2126; --line:#32353c; --text:#e8e8e4; --dim:#9a9a94;
+           --accent:#6bbf90; --danger:#e08b82; --danger-soft:#33211f; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);min-height:100vh;
+       display:flex;align-items:center;justify-content:center;padding:24px;
+       font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+        padding:28px 26px;width:min(360px,100%)}
+  h1{font-size:19px;margin:0 0 4px;letter-spacing:-.01em}
+  .sub{color:var(--dim);font-size:13px;margin-bottom:20px}
+  label{display:block;font-size:12.5px;color:var(--dim);margin-bottom:6px;
+        font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+  input{width:100%;padding:9px 11px;border-radius:8px;border:1px solid var(--line);
+        background:var(--bg);color:var(--text);font:inherit}
+  button{font:inherit;width:100%;margin-top:14px;padding:9px 14px;border-radius:8px;
+         border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer}
+  button:disabled{opacity:.55;cursor:not-allowed}
+  .err{display:none;margin-top:14px;padding:9px 12px;border-radius:8px;font-size:13px;
+       background:var(--danger-soft);color:var(--danger)}
+  .err.show{display:block}
+  .foot{margin-top:18px;font-size:12px;color:var(--dim);line-height:1.5}
+  .lang{width:auto;margin:0;padding:3px 9px;background:none;border-color:var(--line);
+        color:var(--dim);font-size:12px;float:right}
+</style>
+</head>
+<body>
+<div class="card">
+  <button class="lang" id="langToggle"></button>
+  <h1>4Seas Bot</h1>
+  <div class="sub" id="sub"></div>
+  <form id="f" autocomplete="on">
+    <label for="pw" id="lbl"></label>
+    <input type="password" id="pw" name="password" autocomplete="current-password" autofocus>
+    <button type="submit" id="go"></button>
+  </form>
+  <div class="err" id="err"></div>
+  <div class="foot" id="foot"></div>
+</div>
+
+<script>
+const STR = {
+  zh: {
+    sub: '管理页需要密码', lbl: '密码', go: '登录', going: '验证中…',
+    bad: '密码不对', empty: '请输入密码',
+    locked: n => `失败次数过多，请 ${n} 秒后再试`,
+    fail: '登录失败，请重试',
+    unset: '服务器还没设置密码。运行 python -m bot.web.passwd 生成，写进 .env 后重启。',
+    foot: '这个页面能改 bot 在群里说什么。密码只存在服务器的 .env 里（只存哈希）。',
+    toggle: 'EN',
+  },
+  en: {
+    sub: 'This admin page requires a password', lbl: 'Password', go: 'Sign in', going: 'Checking…',
+    bad: 'Wrong password', empty: 'Enter the password',
+    locked: n => `Too many failed attempts — try again in ${n}s`,
+    fail: 'Login failed, please retry',
+    unset: 'No password configured on the server. Run python -m bot.web.passwd, put it in .env, restart.',
+    foot: 'This page controls what the bot says to the group. Only a hash of the password is stored, in the server’s .env.',
+    toggle: '中文',
+  },
+};
+let lang = localStorage.getItem('lang') || 'zh';
+const $ = id => document.getElementById(id);
+
+function paint() {
+  const t = STR[lang];
+  document.documentElement.lang = lang === 'zh' ? 'zh' : 'en';
+  $('sub').textContent = t.sub;
+  $('lbl').textContent = t.lbl;
+  $('go').textContent = t.go;
+  $('foot').textContent = t.foot;
+  $('langToggle').textContent = t.toggle;
+}
+$('langToggle').onclick = () => {
+  lang = lang === 'zh' ? 'en' : 'zh';
+  localStorage.setItem('lang', lang);
+  paint();
+};
+paint();
+
+function fail(text) {
+  const e = $('err');
+  e.textContent = text;
+  e.className = 'err show';
+}
+
+$('f').onsubmit = async (ev) => {
+  ev.preventDefault();
+  const t = STR[lang];
+  const password = $('pw').value;
+  if (!password) return fail(t.empty);
+  $('err').className = 'err';
+  $('go').disabled = true;
+  $('go').textContent = t.going;
+  try {
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({password}),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (res.ok && body.ok) {
+      // 换成 replace：登录页不该留在后退历史里。
+      location.replace('/');
+      return;
+    }
+    // bad_host 的 error 里带着要填哪个 Host，原样显示比翻译更有用。
+    if (res.status === 429) fail(t.locked(body.retry_after || 60));
+    else if (body.reason === 'not_configured') fail(t.unset);
+    else if (res.status === 401) fail(t.bad);
+    else fail(body.error || t.fail);
+  } catch (e) {
+    fail(t.fail);
+  }
+  $('go').disabled = false;
+  $('go').textContent = t.go;
+  $('pw').select();
+};
+</script>
+</body>
+</html>

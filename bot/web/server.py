@@ -11,13 +11,18 @@ Security posture — this endpoint can change what the bot says to a 776-member 
 * A token is always required. If none is configured one is generated at startup and
   printed to the log, so there is no "forgot to set a password" hole.
 * Binding to a non-loopback address without an explicit token in config is refused.
+* Set WEB_PASSWORD_HASH and the page asks for a password instead of a link with a
+  token in the query string. Only the scrypt digest ever leaves the operator's
+  machine, and it lives in .env — never in this repository, which is public.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from aiohttp import web
 
@@ -26,11 +31,15 @@ from ..deps import custom_commands, kb, keyword_rules, settings as _s, storage
 from ..services.command_store import CommandStore, StoreError
 from ..services.custom_commands import RESERVED, check_telegram_html
 from ..services import runtime_config as rc
+from . import auth
 
 log = logging.getLogger(__name__)
 
 INDEX = Path(__file__).parent / "index.html"
+LOGIN = Path(__file__).parent / "login.html"
 TOKEN_HEADER = "X-Admin-Token"
+SECRET_FILE = Path("data/session_secret")
+LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
 
 
 class AdminServer:
@@ -40,22 +49,145 @@ class AdminServer:
         self.token = settings.web_token or secrets.token_urlsafe(18)
         self._generated = not settings.web_token
         self._runner: web.AppRunner | None = None
+        self.password_hash = settings.web_password_hash.strip()
+        # Only when passwords are in use: no reason to drop a key file on disk for
+        # an install that never issues a session.
+        self.secret = auth.load_or_create_secret(SECRET_FILE) if self.password_hash else b""
+        self.throttle = auth.LoginThrottle()
 
     # ── auth ──────────────────────────────────────────────────────────
-    def _authorised(self, request: web.Request) -> bool:
+    @property
+    def password_enabled(self) -> bool:
+        return bool(self.password_hash)
+
+    def _allowed_hosts(self) -> set[str]:
+        extra = {h.strip().lower() for h in settings.web_allowed_hosts.split(",") if h.strip()}
+        return LOOPBACK | {settings.web_host.lower()} | extra
+
+    def _host_ok(self, request: web.Request) -> bool:
+        """Is this Host header one we are willing to hand a session cookie to?
+
+        Cookies are attached by the browser on the strength of a hostname, so a page
+        anywhere on the web can point a name it controls at 127.0.0.1 (DNS rebinding)
+        and then drive this API with the operator's cookie riding along. The Host
+        header is the only thing that tells the two apart.
+
+        Deliberately scoped to the cookie: a token in a header is never sent by a
+        browser on its own, so token clients — curl, scripts, someone on the LAN with
+        WEB_HOST=0.0.0.0 — are unaffected by this check and keep working as before.
+        """
+        raw = request.headers.get("Host", "")
+        if not raw:
+            return False
+        host = urlsplit(f"//{raw}").hostname or ""
+        return host.lower() in self._allowed_hosts()
+
+    def _token_ok(self, request: web.Request) -> bool:
         supplied = request.headers.get(TOKEN_HEADER) or request.query.get("token", "")
         # Constant-time compare: this endpoint is reachable by anything on the host.
-        return bool(supplied) and secrets.compare_digest(supplied, self.token)
+        # Compare as bytes — compare_digest raises TypeError on non-ASCII str, and a
+        # 500 from `?token=中文` is a needlessly interesting thing to hand a prober.
+        return bool(supplied) and secrets.compare_digest(
+            supplied.encode("utf-8", "surrogatepass"), self.token.encode("utf-8")
+        )
+
+    def _session_ok(self, request: web.Request) -> bool:
+        if not self.password_enabled:
+            return False
+        cookie = request.cookies.get(auth.COOKIE_NAME, "")
+        if not cookie:
+            return False
+        if not self._host_ok(request):
+            log.warning(
+                "ignoring a session cookie sent to Host %r — add it to WEB_ALLOWED_HOSTS "
+                "if that is really where you serve this page",
+                request.headers.get("Host", ""),
+            )
+            return False
+        return auth.check_session(cookie, self.secret, self.password_hash)
+
+    def _authorised(self, request: web.Request) -> bool:
+        return self._session_ok(request) or self._token_ok(request)
 
     @web.middleware
     async def _auth_middleware(self, request: web.Request, handler):
-        if request.path == "/" or self._authorised(request):
+        # /login is the one door that has to open before you are authorised.
+        if request.path in ("/", "/api/login") or self._authorised(request):
             return await handler(request)
         return web.json_response({"error": "unauthorised"}, status=401)
 
     # ── routes ────────────────────────────────────────────────────────
     async def _index(self, request: web.Request) -> web.Response:
-        return web.Response(text=INDEX.read_text(encoding="utf-8"), content_type="text/html")
+        page = INDEX if (self._authorised(request) or not self.password_enabled) else LOGIN
+        return web.Response(
+            text=page.read_text(encoding="utf-8"),
+            content_type="text/html",
+            # The token can travel in the query string; keep it out of Referer
+            # headers, and keep this page out of shared caches.
+            headers={"Referrer-Policy": "no-referrer", "Cache-Control": "no-store"},
+        )
+
+    async def _login(self, request: web.Request) -> web.Response:
+        if not self.password_enabled:
+            return web.json_response(
+                {"error": "no password configured", "reason": "not_configured"}, status=503
+            )
+        if not self._host_ok(request):
+            # Issuing the cookie here would just produce a login that never sticks,
+            # because every later request would have its cookie ignored. Say why.
+            host = request.headers.get("Host", "")
+            return web.json_response({
+                "error": f"this page is not served for host {host!r} — "
+                         "add it to WEB_ALLOWED_HOSTS in .env and restart",
+                "reason": "bad_host",
+            }, status=400)
+
+        who = request.remote or "?"
+        wait = self.throttle.retry_after(who)
+        if wait:
+            log.warning("admin login throttled for %s (%ss)", who, wait)
+            return web.json_response({"error": "too many attempts", "retry_after": wait}, status=429)
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        password = str(body.get("password", "")) if isinstance(body, dict) else ""
+
+        # scrypt is ~60ms of pure CPU, and this runs in the bot's own event loop —
+        # the one polling Telegram. Push it to a thread so a login never stalls the
+        # group's messages.
+        loop = asyncio.get_running_loop()
+        ok = await loop.run_in_executor(None, auth.verify_password, password, self.password_hash)
+        if not ok:
+            self.throttle.record_failure(who)
+            log.warning("admin login failed from %s", who)
+            return web.json_response({"error": "wrong password"}, status=401)
+
+        self.throttle.reset(who)
+        log.info("admin login from %s", who)
+        response = web.json_response({"ok": True})
+        response.set_cookie(
+            auth.COOKIE_NAME,
+            auth.issue_session(self.secret, self.password_hash, settings.web_session_days * 86400),
+            max_age=settings.web_session_days * 86400,
+            httponly=True,
+            # Strict, not Lax: every state-changing call here is same-origin fetch,
+            # so nothing legitimate needs the cookie on a cross-site navigation —
+            # and that is exactly what makes CSRF a non-issue.
+            samesite="Strict",
+            path="/",
+        )
+        return response
+
+    async def _logout(self, request: web.Request) -> web.Response:
+        response = web.json_response({"ok": True})
+        response.del_cookie(auth.COOKIE_NAME, path="/")
+        return response
+
+    async def _whoami(self, request: web.Request) -> web.Response:
+        """Lets the page know whether to offer a "sign out" button at all."""
+        return web.json_response({"password_enabled": self.password_enabled})
 
     def _serialise(self) -> list[dict]:
         live = {c.command for c in custom_commands.commands}
@@ -315,6 +447,9 @@ class AdminServer:
         app = web.Application(middlewares=[self._auth_middleware])
         app.add_routes([
             web.get("/", self._index),
+            web.post("/api/login", self._login),
+            web.post("/api/logout", self._logout),
+            web.get("/api/whoami", self._whoami),
             web.get("/api/commands", self._list),
             web.post("/api/commands", self._create),
             web.put("/api/commands/{name}", self._update),
@@ -333,10 +468,11 @@ class AdminServer:
     # ── lifecycle ─────────────────────────────────────────────────────
     async def start(self) -> None:
         host = settings.web_host
-        if host not in ("127.0.0.1", "localhost", "::1") and self._generated:
+        if host not in ("127.0.0.1", "localhost", "::1") and self._generated and not self.password_enabled:
             log.error(
-                "Refusing to bind the admin UI to %s without an explicit WEB_TOKEN. "
-                "Set WEB_TOKEN in .env, or leave WEB_HOST=127.0.0.1 and use an SSH tunnel.",
+                "Refusing to bind the admin UI to %s with no stable credential. "
+                "Set WEB_PASSWORD_HASH (python -m bot.web.passwd) or WEB_TOKEN in .env, "
+                "or leave WEB_HOST=127.0.0.1 and use an SSH tunnel.",
                 host,
             )
             return
@@ -362,7 +498,14 @@ class AdminServer:
             await self._cleanup_runner()
             return
 
-        log.info("Admin UI on http://%s:%s/?token=%s", host, settings.web_port, self.token)
+        if self.password_enabled:
+            log.info("Admin UI on http://%s:%s/ — password login", host, settings.web_port)
+        else:
+            log.info("Admin UI on http://%s:%s/?token=%s", host, settings.web_port, self.token)
+            log.warning(
+                "WEB_PASSWORD_HASH not set — anyone who can reach this port and read the "
+                "token can edit the bot. Run `python -m bot.web.passwd` to add a password."
+            )
         if self._generated:
             log.warning(
                 "WEB_TOKEN not set — generated one for this run only. "

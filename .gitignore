@@ -224,3 +224,5 @@ data/*.sqlite3-wal
 data/*.sqlite3-shm
 data/bot.pid
 data/bot.log
+# 管理页会话 cookie 的签名密钥。泄露 = 别人可以伪造登录态。
+data/session_secret
