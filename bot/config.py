@@ -108,6 +108,17 @@ class Settings(BaseSettings):
     # 留空则每次启动随机生成并打到日志里。填了才有稳定链接。
     # 绑非回环地址时必须显式填，否则拒绝启动。
     web_token: str = ""
+    # 管理页登录密码的 scrypt 摘要（`scrypt$N$r$p$salt$hash`）。
+    # 用 `python -m bot.web.passwd` 生成，只写进 .env —— 仓库是公开的，
+    # 不要写进代码。留空 = 不启用密码登录，退回到只认 token。
+    web_password_hash: str = ""
+    # 登录后 cookie 有效期。改密码会立刻作废所有已发出的会话。
+    web_session_days: int = Field(default=7, ge=1, le=90)
+    # 允许的 Host 头，逗号分隔。默认只认 web_host 和回环名。
+    # 反向代理挂域名时必须填上那个域名，否则一律 400 ——
+    # 这是防 DNS rebinding：浏览器可以把域名解析到 127.0.0.1，再带着
+    # 你的 cookie 打这个端口，只有 Host 头能识破。
+    web_allowed_hosts: str = ""
 
     db_path: str = "data/bot.sqlite3"
     log_level: str = "INFO"
