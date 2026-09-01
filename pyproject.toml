@@ -1,6 +1,6 @@
 [project]
 name = "4seas-bot"
-version = "0.1.0"
+version = "0.4.0"
 description = "4Seas community Telegram bot — daily events, Q&A, interactions, keyword triggers"
 readme = "README.md"
 license = { text = "Apache-2.0" }

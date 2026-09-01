@@ -7,7 +7,7 @@
 **每天晚上七点，替社区把明天的活动讲清楚。**
 
 [![release](https://img.shields.io/github/v/release/4seas-community/4Seas-bot?style=flat-square&color=2f6f4f)](https://github.com/4seas-community/4Seas-bot/releases)
-[![tests](https://img.shields.io/badge/tests-221%20passing-2f6f4f?style=flat-square)](tests/)
+[![tests](https://img.shields.io/badge/tests-264%20passing-2f6f4f?style=flat-square)](tests/)
 [![license](https://img.shields.io/badge/license-Apache--2.0-lightgrey?style=flat-square)](LICENSE)
 [![python](https://img.shields.io/badge/python-3.11%2B-3776ab?style=flat-square)](pyproject.toml)
 
@@ -195,6 +195,7 @@ python -m bot.web.passwd --ask    # 或者自己定
 | `?token=` | 仍然可用，留给 curl / 脚本；人用密码，机器用 token |
 
 > 默认只绑 `127.0.0.1`。远程访问走 SSH 隧道：`ssh -N -L 8477:127.0.0.1:8477 user@host`。
+> 如果服务器禁用了 SSH TCP forwarding，macOS 可运行 `deploy/open-bot-admin.sh`，通过普通 SSH 会话建立本地中继。
 > 真要挂域名，`WEB_ALLOWED_HOSTS` 必须填上那个域名——默认只认回环 Host 头，防的是
 > DNS rebinding：恶意域名可以解析到 `127.0.0.1`，再带着你浏览器里的 cookie 打这个端口。
 > **密钥刻意不能在页面上改**——能改 bot token 的网页表单，等于把 localhost 页面变成凭据库。
@@ -302,7 +303,7 @@ iCal  GET /api/v1/groups/4seas/calendar.ics   ← 降级用
 
 ```bash
 uv pip install -e ".[dev]"
-python -m pytest -q          # 221 passing
+python -m pytest -q          # 264 passing
 ```
 
 不需要 `.env`、不需要任何密钥——`tests/conftest.py` 会填占位配置并显式关掉 `.env`，保证本机和 CI 跑的是同一套。
