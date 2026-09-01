@@ -95,7 +95,10 @@
   <header>
     <h1>4Seas Bot</h1>
     <span class="sub" id="hSub"></span>
-    <span style="margin-left:auto"><button class="lang" id="langToggle"></button></span>
+    <span style="margin-left:auto">
+      <button class="lang" id="logout" hidden></button>
+      <button class="lang" id="langToggle"></button>
+    </span>
   </header>
   <div class="sub" id="hTag"></div>
 
@@ -207,6 +210,7 @@ const STR = {
     stEvents: '活动', stLive: '在架', stTotal: '总计', stLastSync: '上次导入',
     stNever: '从未', stSyncAt: '导入时间', stDigest: '播报', stFaq: 'FAQ 条目',
     stKeywords: '关键词规则', stCommands: '自定义命令', stMuted: '静默群', stDaily: '每天',
+    logout: '退出登录', expired: '登录已过期，正在回到登录页…',
   },
   en: {
     subtitle: 'command management', tagline: 'Changes take effect immediately — no restart, no /reload.',
@@ -233,6 +237,7 @@ const STR = {
     stEvents: 'events', stLive: 'live', stTotal: 'total', stLastSync: 'last sync',
     stNever: 'never', stSyncAt: 'sync at', stDigest: 'digest', stFaq: 'faq',
     stKeywords: 'keywords', stCommands: 'commands', stMuted: 'muted', stDaily: 'daily',
+    logout: 'Sign out', expired: 'Session expired — returning to the login page…',
   },
 };
 let lang = localStorage.getItem('lang') || 'zh';
@@ -247,11 +252,29 @@ async function api(path, opts = {}) {
     headers: {'Content-Type': 'application/json', 'X-Admin-Token': token, ...(opts.headers || {})},
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error || (res.status === 401
-    ? 'Unauthorised — open this page using the ?token=… link from the bot log.'
-    : `Request failed (${res.status})`));
+  if (res.status === 401) {
+    // 密码模式下 401 只意味着会话过期。重新加载 `/` 就会拿到登录页，
+    // 比让用户对着一句英文报错发呆强。
+    if (passwordMode) {
+      flash(t('expired'), 'warn');
+      setTimeout(() => location.reload(), 1200);
+    }
+    throw new Error(body.error || (passwordMode
+      ? 'Session expired'
+      : 'Unauthorised — open this page using the ?token=… link from the bot log.'));
+  }
+  if (!res.ok) throw new Error(body.error || `Request failed (${res.status})`);
   return body;
 }
+
+// 有没有开密码登录，决定要不要显示「退出登录」。
+let passwordMode = false;
+
+$('logout').onclick = async () => {
+  try { await api('/api/logout', {method: 'POST'}); } catch (e) { /* 无论如何都回登录页 */ }
+  sessionStorage.removeItem('t');
+  location.replace('/');
+};
 
 function flash(text, kind = 'ok') {
   const m = $('msg');
@@ -404,6 +427,7 @@ function applyLang() {
   $('reloadAll').textContent = t('reloadAll');
   $('refresh').textContent = t('refresh');
   $('saveSettings').textContent = t('save');
+  $('logout').textContent = t('logout');
   document.querySelectorAll('[data-i18n]').forEach(el => el.textContent = t(el.dataset.i18n));
   document.querySelectorAll('[data-i18n-html]').forEach(el => el.innerHTML = t(el.dataset.i18nHtml));
 }
@@ -510,6 +534,9 @@ async function load() {
 }
 
 applyLang();
+api('/api/whoami')
+  .then(w => { passwordMode = !!w.password_enabled; $('logout').hidden = !passwordMode; })
+  .catch(() => {});
 load();
 </script>
 </body>

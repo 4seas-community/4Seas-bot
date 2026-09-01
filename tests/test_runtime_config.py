@@ -75,7 +75,8 @@ def test_choice_must_be_known():
 
 def test_secrets_are_not_editable():
     """A localhost form that can rewrite the bot token turns into a credential store."""
-    for secret in ("telegram_bot_token", "deepseek_api_key", "openai_api_key", "web_token"):
+    for secret in ("telegram_bot_token", "deepseek_api_key", "openai_api_key", "web_token",
+                   "web_password_hash"):
         assert secret not in rc.BY_KEY
 
 
