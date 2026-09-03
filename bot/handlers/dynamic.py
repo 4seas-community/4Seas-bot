@@ -39,23 +39,51 @@ def _make_callback(cmd: CustomCommand):
             return
 
         if cmd.admin_only and not settings.is_admin(user.id if user else None):
-            log.info("/%s denied: user %s is not an admin", cmd.command, user.id if user else "?")
+            log.info(
+                "/%s denied | update=%s message=%s user=%s chat=%s reason=not-admin",
+                cmd.command,
+                update.update_id,
+                msg.message_id,
+                user.id if user else "?",
+                chat.id,
+            )
             return
 
         is_private = chat.type == ChatType.PRIVATE
         if cmd.scope == "private" and not is_private:
+            log.debug(
+                "/%s skipped | update=%s message=%s chat=%s reason=private-only",
+                cmd.command, update.update_id, msg.message_id, chat.id,
+            )
             return
         if cmd.scope == "group" and is_private:
+            log.debug(
+                "/%s skipped | update=%s message=%s chat=%s reason=group-only",
+                cmd.command, update.update_id, msg.message_id, chat.id,
+            )
             return
 
         log.info(
-            "custom command /%s | user=%s chat=%s | from %s",
-            cmd.command, user.id if user else "?", chat.id, cmd.source_file,
+            "custom command /%s | update=%s message=%s user=%s chat=%s | from %s",
+            cmd.command,
+            update.update_id,
+            msg.message_id,
+            user.id if user else "?",
+            chat.id,
+            cmd.source_file,
         )
-        await msg.reply_text(
+        sent = await msg.reply_text(
             cmd.reply,
             parse_mode=cmd.telegram_parse_mode,
             disable_web_page_preview=cmd.disable_preview,
+        )
+        log.info(
+            "custom command /%s sent | update=%s message=%s response=%s chat=%s",
+            cmd.command,
+            update.update_id,
+            msg.message_id,
+            getattr(sent, "message_id", "?"),
+            chat.id,
         )
 
     handler.__name__ = f"custom_{cmd.command}"
@@ -86,6 +114,14 @@ class DynamicCommandManager:
             handler = CommandHandler(cmd.command, _make_callback(cmd))
             self.app.add_handler(handler, group=DYNAMIC_GROUP)
             self._registered.append(handler)
+            log.debug(
+                "registered custom command /%s | group=%s source=%s scope=%s admin_only=%s",
+                cmd.command,
+                DYNAMIC_GROUP,
+                cmd.source_file,
+                cmd.scope,
+                cmd.admin_only,
+            )
 
         log.info(
             "custom commands: -%d +%d → %s",

@@ -1,4 +1,4 @@
-"""全局错误处理与群白名单守卫。"""
+"""Global update guards and error handling."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import html
 import logging
 import time
 import traceback
+from collections import deque
 
 from telegram import Update
 from telegram.constants import ParseMode
@@ -15,6 +16,115 @@ from telegram.ext import ApplicationHandlerStop, ContextTypes
 from ..deps import settings
 
 log = logging.getLogger(__name__)
+
+
+# Telegram update IDs are monotonically increasing during normal operation. PTB
+# already advances the getUpdates offset, but keeping a small in-process window
+# makes replies idempotent if the same update is ever delivered twice. The cache
+# is deliberately bounded so a long-running bot cannot grow it forever.
+RECENT_UPDATE_LIMIT = 2048
+_recent_update_ids: deque[int] = deque()
+_recent_update_set: set[int] = set()
+
+
+def _update_meta(
+    update: Update,
+) -> tuple[int | None, int | None, int | None, int | None, str]:
+    """Return safe identifiers that make a repeated reply diagnosable."""
+    message = update.effective_message
+    chat = update.effective_chat
+    user = update.effective_user
+    kind = next(
+        (
+            name
+            for name in (
+                "message",
+                "edited_message",
+                "channel_post",
+                "edited_channel_post",
+                "business_message",
+                "edited_business_message",
+                "guest_message",
+            )
+            if getattr(update, name, None) is not None
+        ),
+        "other",
+    )
+    return (
+        getattr(update, "update_id", None),
+        getattr(message, "message_id", None),
+        getattr(user, "id", None),
+        getattr(chat, "id", None),
+        kind,
+    )
+
+
+async def guard_duplicate_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Stop an exact Telegram update from reaching business handlers twice."""
+    update_id, message_id, user_id, chat_id, kind = _update_meta(update)
+    message = update.effective_message
+    text = getattr(message, "text", None) or ""
+    command = text.split(maxsplit=1)[0] if text.startswith("/") else None
+
+    if command:
+        # Record only the command token, never its arguments: /ask arguments may
+        # contain private questions, names, or other personal information.
+        log.info(
+            "Telegram command received | command=%s update=%s message=%s "
+            "user=%s chat=%s type=%s",
+            command,
+            update_id,
+            message_id,
+            user_id,
+            chat_id,
+            kind,
+        )
+    else:
+        log.debug(
+            "Telegram update received | update=%s message=%s user=%s chat=%s type=%s",
+            update_id,
+            message_id,
+            user_id,
+            chat_id,
+            kind,
+        )
+
+    if update_id is None:
+        log.debug("update has no update_id; duplicate guard skipped")
+        return
+
+    if update_id in _recent_update_set:
+        log.warning(
+            "duplicate Telegram update ignored | update=%s message=%s user=%s "
+            "chat=%s type=%s cache=%s",
+            update_id,
+            message_id,
+            user_id,
+            chat_id,
+            kind,
+            len(_recent_update_ids),
+        )
+        raise ApplicationHandlerStop
+
+    if len(_recent_update_ids) >= RECENT_UPDATE_LIMIT:
+        _recent_update_set.discard(_recent_update_ids.popleft())
+    _recent_update_ids.append(update_id)
+    _recent_update_set.add(update_id)
+    log.debug("Telegram update accepted | update=%s cache=%s", update_id, len(_recent_update_ids))
+
+
+async def ignore_edited_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Do not rerun commands, mentions, or keyword rules after a message edit."""
+    update_id, message_id, user_id, chat_id, kind = _update_meta(update)
+    log.info(
+        "edited message ignored | update=%s message=%s user=%s chat=%s type=%s",
+        update_id,
+        message_id,
+        user_id,
+        chat_id,
+        kind,
+    )
+    raise ApplicationHandlerStop
 
 
 async def guard_allowed_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -115,7 +225,19 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     _transient_streak = 0
     _transient_alerted_at = 0.0
-    log.error("处理更新时出错", exc_info=error)
+    if isinstance(update, Update):
+        update_id, message_id, user_id, chat_id, kind = _update_meta(update)
+        log.error(
+            "处理更新时出错 | update=%s message=%s user=%s chat=%s type=%s",
+            update_id,
+            message_id,
+            user_id,
+            chat_id,
+            kind,
+            exc_info=error,
+        )
+    else:
+        log.error("处理更新时出错 | update unavailable", exc_info=error)
 
     if not settings.admin_ids:
         return

@@ -55,10 +55,19 @@ def setup_logging() -> None:
 def build_application() -> Application:
     app = ApplicationBuilder().token(settings.telegram_bot_token).build()
 
+    # group -2: make processing idempotent if Telegram ever redelivers an update.
+    app.add_handler(TypeHandler(Update, errors.guard_duplicate_update), group=-2)
+
     # group -1：白名单守卫，先于一切业务逻辑
     app.add_handler(TypeHandler(Update, errors.guard_allowed_chat), group=-1)
 
     # group 0：命令
+    # An edited command is still a CommandHandler match in PTB because it uses
+    # Update.effective_message. Stop all edited messages here so an old /wifi (or
+    # a mention/keyword) cannot trigger a second reply when edited later.
+    app.add_handler(
+        MessageHandler(filters.UpdateType.EDITED, errors.ignore_edited_message)
+    )
     app.add_handler(CommandHandler("start", commands.cmd_start))
     app.add_handler(CommandHandler("help", commands.cmd_help))
     app.add_handler(CommandHandler("events", commands.cmd_events))
@@ -152,6 +161,10 @@ def main() -> None:
 
     app = build_application()
     log.info("4Seas Bot 启动，开始长轮询…")
+    log.info(
+        "polling configuration | allowed_updates=all drop_pending_updates=%s",
+        settings.drop_pending_updates,
+    )
     app.run_polling(
         allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=settings.drop_pending_updates,

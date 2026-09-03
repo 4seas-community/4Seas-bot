@@ -7,6 +7,7 @@ these ships a wrong message to a 776-member group or stops the bot starting.
 import datetime as dt
 import json
 import pathlib
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -17,6 +18,115 @@ from bot.services.digest_writer import INVITE_ANGLE, choose_angles
 from bot.storage import Storage
 
 BKK = ZoneInfo("Asia/Bangkok")
+
+
+# ── Telegram updates must produce at most one reply ──────────────────
+
+
+@pytest.fixture
+def clean_update_guard():
+    from bot.handlers import errors
+
+    errors._recent_update_ids.clear()
+    errors._recent_update_set.clear()
+    yield
+    errors._recent_update_ids.clear()
+    errors._recent_update_set.clear()
+
+
+async def test_exact_duplicate_update_is_stopped(clean_update_guard, caplog):
+    """A redelivered Telegram update must never run a command twice."""
+    from telegram.ext import ApplicationHandlerStop
+    from bot.handlers import errors
+
+    update = SimpleNamespace(
+        update_id=12345,
+        effective_message=SimpleNamespace(message_id=77),
+        effective_user=SimpleNamespace(id=501),
+        effective_chat=SimpleNamespace(id=-1001),
+        message=object(),
+        edited_message=None,
+        channel_post=None,
+        edited_channel_post=None,
+        business_message=None,
+        edited_business_message=None,
+        guest_message=None,
+    )
+
+    await errors.guard_duplicate_update(update, None)
+    with pytest.raises(ApplicationHandlerStop):
+        await errors.guard_duplicate_update(update, None)
+
+    assert "duplicate Telegram update ignored" in caplog.text
+    assert "update=12345" in caplog.text
+    assert "message=77" in caplog.text
+
+
+async def test_edited_message_is_logged_and_stopped(caplog):
+    """Editing an old /wifi message must not produce another reply."""
+    from telegram.ext import ApplicationHandlerStop
+    from bot.handlers import errors
+
+    caplog.set_level("INFO", logger="bot.handlers.errors")
+    message = SimpleNamespace(message_id=88)
+    update = SimpleNamespace(
+        update_id=12346,
+        effective_message=message,
+        effective_user=SimpleNamespace(id=501),
+        effective_chat=SimpleNamespace(id=-1001),
+        message=None,
+        edited_message=message,
+        channel_post=None,
+        edited_channel_post=None,
+        business_message=None,
+        edited_business_message=None,
+        guest_message=None,
+    )
+
+    with pytest.raises(ApplicationHandlerStop):
+        await errors.ignore_edited_message(update, None)
+
+    assert "edited message ignored" in caplog.text
+    assert "type=edited_message" in caplog.text
+
+
+async def test_command_audit_log_omits_command_arguments(clean_update_guard, caplog):
+    """Identifiers aid diagnosis, but /ask text and other arguments stay private."""
+    from bot.handlers import errors
+
+    caplog.set_level("INFO", logger="bot.handlers.errors")
+    message = SimpleNamespace(message_id=89, text="/ask private question about a member")
+    update = SimpleNamespace(
+        update_id=12347,
+        effective_message=message,
+        effective_user=SimpleNamespace(id=502),
+        effective_chat=SimpleNamespace(id=-1002),
+        message=message,
+        edited_message=None,
+        channel_post=None,
+        edited_channel_post=None,
+        business_message=None,
+        edited_business_message=None,
+        guest_message=None,
+    )
+
+    await errors.guard_duplicate_update(update, None)
+
+    assert "command=/ask" in caplog.text
+    assert "update=12347" in caplog.text
+    assert "message=89" in caplog.text
+    assert "private question" not in caplog.text
+
+
+def test_update_guards_run_before_command_handlers():
+    """Registration order is the safety property: duplicate, allow-list, edit, command."""
+    from bot.__main__ import build_application
+    from bot.handlers import errors
+
+    app = build_application()
+    assert app.handlers[-2][0].callback is errors.guard_duplicate_update
+    assert app.handlers[-1][0].callback is errors.guard_allowed_chat
+    assert app.handlers[0][0].callback is errors.ignore_edited_message
 
 
 def ev(eid="e1", *, venue=None, content=None, start=None, end=None, title="T"):
