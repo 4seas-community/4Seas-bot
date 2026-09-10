@@ -2,8 +2,17 @@
 set -euo pipefail
 
 readonly local_port="${BOT_ADMIN_LOCAL_PORT:-8477}"
-readonly remote_host="${BOT_ADMIN_SSH_HOST:-149.28.158.244}"
-readonly remote_user="${BOT_ADMIN_SSH_USER:-jason}"
+readonly remote_host="${BOT_ADMIN_SSH_HOST:-}"
+readonly remote_user="${BOT_ADMIN_SSH_USER:-$(id -un)}"
+
+if [[ -z "${remote_host}" ]]; then
+  printf 'Set BOT_ADMIN_SSH_HOST to the host running the bot, e.g.\n' >&2
+  printf '  BOT_ADMIN_SSH_HOST=bot.internal %s\n' "$0" >&2
+  printf '\nThis relay is only needed when the host disables SSH TCP forwarding.\n' >&2
+  printf 'On a tailnet, bind the console to the host address instead —\n' >&2
+  printf 'see docs/HOST-MIGRATION.md.\n' >&2
+  exit 2
+fi
 readonly admin_url="http://127.0.0.1:${local_port}/"
 readonly script_path="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 

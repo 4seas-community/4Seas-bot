@@ -1,13 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  4Seas Bot on the Mac mini. Migrated off 149.28.158.244 on 2026-09-10.
+  4Seas Bot on an always-on Mac mini. Migrated off a Linux cloud host
+  on 2026-09-10 — see docs/HOST-MIGRATION.md.
 
-  Layout mirrors the 244 host: immutable release dirs + a `current` symlink,
+  Layout mirrors the previous host: immutable release dirs + a `current` symlink,
   with data and .env symlinked into the release from ../../shared/data and
   ../../env, so a release swap never touches persistent state.
 
   Only one process may poll a Telegram token. Before starting this, make sure
-  244's `4seas-app@autobot` is stopped and disabled, or both will get 409.
+  the previous host's service is stopped and disabled, or both will get 409.
 -->
 <plist version="1.0">
 <dict>

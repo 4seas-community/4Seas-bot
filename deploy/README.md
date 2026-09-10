@@ -64,6 +64,8 @@ sudo systemctl restart 4seas-bot
 
 ## Mac mini as an always-on host
 
+For moving the bot between hosts, see [`../docs/HOST-MIGRATION.md`](../docs/HOST-MIGRATION.md).
+
 `com.4seas.bot.macmini.plist` is the agent used by the current production host. It
 runs the interpreter from a `current` symlink so a release swap needs no plist edit:
 
