@@ -62,6 +62,54 @@ Restart after changing credentials or other `.env` settings:
 sudo systemctl restart 4seas-bot
 ```
 
+## Mac mini as an always-on host
+
+`com.4seas.bot.macmini.plist` is the agent used by the current production host. It
+runs the interpreter from a `current` symlink so a release swap needs no plist edit:
+
+```
+/Users/jason/4seas-autobot/
+  releases/<UTC timestamp>-<sha>/   # code; .env -> ../../env, data -> ../../shared/data
+  current -> releases/<...>
+  shared/data/                      # SQLite and YAML config; survives release swaps
+  env                               # mode 0600
+  logs/bot.log
+```
+
+```bash
+cp deploy/com.4seas.bot.macmini.plist ~/Library/LaunchAgents/com.4seas.bot.plist
+launchctl load ~/Library/LaunchAgents/com.4seas.bot.plist
+tail -f ~/4seas-autobot/logs/bot.log
+```
+
+The interpreter comes from `uv sync --extra dev --locked` inside the release
+directory. macOS ships Python 3.9, which does not satisfy `requires-python >=3.11`,
+so do not point the plist at `/usr/bin/python3`.
+
+Two host settings this depends on:
+
+1. `pmset -g` must show `sleep 0` and `disksleep 0`. A sleeping host misses the
+   19:00 digest, and it is not sent retroactively on wake.
+2. A LaunchAgent only loads once a GUI session exists. Without automatic login the
+   bot does not come back after a reboot. Check with
+   `sudo defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser`.
+
+## Access the admin console over Tailscale
+
+When the host is on a tailnet, bind the console to its Tailscale address instead of
+relaying over SSH:
+
+```
+WEB_HOST=100.x.y.z
+WEB_PORT=8477
+```
+
+`WEB_HOST` is added to the allowed Host headers automatically, so `WEB_ALLOWED_HOSTS`
+stays empty for this case. Binding anywhere other than loopback is refused unless
+`WEB_PASSWORD_HASH` or `WEB_TOKEN` is set, which keeps an unauthenticated console off
+the network. The tailnet is the security boundary here: do not forward this port
+beyond it.
+
 ## Access the admin console from macOS
 
 The admin console listens on the server's `127.0.0.1:8477` by default and must not be exposed directly to the public internet.
@@ -101,6 +149,8 @@ Do not improvise a production path or service name from this generic guide. Reso
 ## Important notes
 
 - Run exactly one polling instance per Telegram bot token.
+- `shared/data/runtime_config.json` overrides `.env`. Read both before
+  concluding what a running bot is configured to do.
 - The `data/` directory must be writable because it contains SQLite and WAL files.
 - With `ProtectSystem=strict`, only paths listed in `ReadWritePaths` are writable.
 - Event imports are idempotent; restarting or repeating a sync does not create duplicate events.
