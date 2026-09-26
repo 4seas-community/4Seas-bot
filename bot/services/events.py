@@ -1,4 +1,8 @@
-"""活动数据源：Sola API → Sola iCal → 本地 YAML 三级降级。
+"""活动数据源：CommunityOS → Sola API → Sola iCal → 本地 YAML 四级降级。
+
+CommunityOS（4Seas 自建系统）是社区活动的主数据源，通过它自己的拉取 feed
+（GET /v1/integrations/bot/events，见 docs/04-integrations.md §4）读取已发布活动。
+未配置 communityos_api_base 时该源直接跳过，行为与之前完全一致。
 
 Sola 没有公开 API 文档，端点是从开源前端 sociallayer-im/seastar-app 的
 packages/sola-sdk 源码里读出来的，契约随时可能变 —— 所以这里对字段缺失一律容错，
@@ -61,6 +65,61 @@ class EventSource:
 
     async def fetch(self, window_start: dt.datetime, window_end: dt.datetime) -> list[Event]:
         raise NotImplementedError
+
+
+class CommunityOsSource(EventSource):
+    """GET {api}/v1/integrations/bot/events?from=&to=（CommunityOS 拉取 feed）"""
+
+    name = "communityos"
+
+    def _to_event(self, raw: dict) -> Event | None:
+        start = _parse_iso(raw.get("startAt"))
+        if start is None:
+            return None
+        venue = raw.get("venue") or {}
+        return Event(
+            id=str(raw.get("id") or ""),
+            title=(raw.get("title") or "(无标题)").strip(),
+            start=start,
+            end=_parse_iso(raw.get("endAt")),
+            tz=raw.get("timezone") or settings.tz,
+            place_title=(venue.get("name") or None),
+            venue_name=(venue.get("name") or None),
+            place_address=(venue.get("address") or raw.get("externalLocation") or None),
+            content=(raw.get("description") or None),
+            max_participants=raw.get("maxCapacity"),
+            tags=[t for t in (raw.get("tags") or []) if t],
+            meeting_url=(raw.get("meetingUrl") or None),
+            url=(raw.get("url") or None),
+            source=self.name,
+        )
+
+    async def fetch(self, window_start: dt.datetime, window_end: dt.datetime) -> list[Event]:
+        if not settings.communityos_api_base:
+            raise RuntimeError("CommunityOS 未配置（communityos_api_base 为空）")
+
+        url = f"{settings.communityos_api_base.rstrip('/')}/v1/integrations/bot/events"
+        headers = {}
+        if settings.communityos_feed_token:
+            headers["Authorization"] = f"Bearer {settings.communityos_feed_token}"
+
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+            resp = await client.get(
+                url,
+                params={
+                    "from": window_start.isoformat(),
+                    "to": window_end.isoformat(),
+                },
+                headers=headers,
+            )
+            resp.raise_for_status()
+            body = resp.json()
+
+        rows = body.get("events") or []
+        events = [e for e in (self._to_event(r) for r in rows) if e]
+        if not events:
+            raise RuntimeError("CommunityOS 返回 0 条活动")
+        return events
 
 
 class SolaApiSource(EventSource):
@@ -283,7 +342,12 @@ class EventService:
     """只负责从上游把活动拉下来。落库、去重、查询都归 Storage。"""
 
     def __init__(self, sources: list[EventSource] | None = None) -> None:
-        self.sources = sources or [SolaApiSource(), SolaIcsSource(), LocalYamlSource()]
+        self.sources = sources or [
+            CommunityOsSource(),
+            SolaApiSource(),
+            SolaIcsSource(),
+            LocalYamlSource(),
+        ]
         self.last_source: str | None = None
         self.last_error: str | None = None
 
