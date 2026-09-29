@@ -71,10 +71,3 @@ The bot always replies in English, whatever language you ask in.
 [NEEDS VERIFICATION — admins, please replace this entry]
 Thai visa questions come up regularly in the group and many members have been through
 the process. Ask in the group and someone will usually answer.
-
-## Accommodation
-<!-- also: 住宿 住哪 房子 租房 公寓 共居 ที่พัก -->
-
-[NEEDS VERIFICATION — admins, please replace this entry]
-Housing and co-living options are a frequent topic in the group. Ask and people will share
-what they know.
