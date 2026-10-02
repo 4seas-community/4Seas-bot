@@ -141,3 +141,64 @@ def test_offset_zero_keeps_old_behaviour():
     """默认 offset=0 时行为不变 —— /events 仍然从今天算起。"""
     now = dt.datetime(2026, 7, 30, 19, 0, tzinfo=BKK)
     assert day_window(0, BKK, now=now) == day_window(0, BKK, now=now, offset_days=0)
+
+
+# --------------------------------------------------------------------------- #
+# CommunityOS 源（首选）—— 结构与 feed 契约见 4Seas-CommunityOS docs/04 §4.2
+# --------------------------------------------------------------------------- #
+
+from bot.services.events import CommunityOsSource  # noqa: E402
+
+COMMUNITYOS_SAMPLE = {
+    "id": "af064242-d019-4554-a147-f64b0bb81a89",
+    "title": "Community Welcome Session",
+    "description": "Weekly welcome session.",
+    "startAt": "2026-10-05T03:00:00.000Z",
+    "endAt": "2026-10-05T05:00:00.000Z",
+    "timezone": "Asia/Bangkok",
+    "eventType": "in_person",
+    "venue": {"id": "v1", "name": "Event Space", "building": "Building F", "address": "Nimman"},
+    "externalLocation": None,
+    "meetingUrl": None,
+    "visibility": "public",
+    "tags": ["community"],
+    "maxCapacity": 30,
+    "url": None,
+}
+
+
+def test_communityos_parses_feed_shape():
+    ev = CommunityOsSource()._to_event(COMMUNITYOS_SAMPLE)
+    assert ev is not None
+    assert ev.title == "Community Welcome Session"
+    assert ev.start == dt.datetime(2026, 10, 5, 3, 0, tzinfo=dt.timezone.utc)
+    assert ev.venue_name == "Event Space"
+    assert ev.source == "communityos"
+    assert ev.tags == ["community"]
+    assert ev.max_participants == 30
+
+
+def test_communityos_skips_rows_without_start():
+    assert CommunityOsSource()._to_event({"title": "no time"}) is None
+
+
+def test_communityos_is_first_in_fallback_chain():
+    from bot.services.events import EventService
+
+    names = [s.name for s in EventService().sources]
+    assert names[0] == "communityos"
+    assert names[1:] == ["sola_api", "sola_ics", "local_yaml"]
+
+
+def test_communityos_source_is_skipped_when_unconfigured(monkeypatch):
+    """未配置 api base 时抛错，让 EventService 落到下一个源。"""
+    source = CommunityOsSource()
+    import asyncio
+
+    monkeypatch.setattr("bot.services.events.settings.communityos_api_base", "")
+    try:
+        asyncio.run(source.fetch(dt.datetime.now(dt.timezone.utc), dt.datetime.now(dt.timezone.utc)))
+    except RuntimeError as exc:
+        assert "未配置" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected RuntimeError")

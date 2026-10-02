@@ -74,6 +74,11 @@ class Settings(BaseSettings):
     sola_group: str = "4seas"
     sola_api_base: str = "https://api.sola.day"
     sola_web_base: str = "https://app.sola.day"
+
+    # CommunityOS（4Seas 自建社区系统）—— 首选事件源，见 docs/04-integrations.md §4。
+    # 留空 communityos_api_base 即停用该源，自动回落到 Social Layer。
+    communityos_api_base: str = ""
+    communityos_feed_token: str = ""
     # 逗号分隔，可以配多个时间点。播报前那次是必须的，其余是为了让白天新加的活动
     # 也能及时进库。
     sync_times: str = "08:30,18:30"
